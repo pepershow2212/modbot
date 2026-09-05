@@ -1,0 +1,7 @@
+# секреты и локальное — не коммитить
+.env
+database/ecosystem.db*
+database/backups/
+logs/
+__pycache__/
+*.pyc
