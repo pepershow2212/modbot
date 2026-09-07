@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-TOKEN = os.getenv("DISCORD_TOKEN", "")
+TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("TOKEN", "")
 TEST_GUILD_ID = os.getenv("GUILD_ID")  # опционально для быстрого синка
 
 # WARDOGS yellow — фирменный жёлто-чёрный стиль
