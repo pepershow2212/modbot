@@ -18,7 +18,12 @@ def build_voice_panel(owner: discord.Member, voice: discord.VoiceChannel, filt_g
     c = discord.ui.Container(
         discord.ui.TextDisplay(f"## {t_sync(lang, 'v_title')}\n**{t_sync(lang, 'v_owner')}:** {owner.mention}\n**{t_sync(lang, 'v_room')}:** 🔊 {voice.name}\n**{t_sync(lang, 'v_server')}:** `{server_id}` • **{t_sync(lang, 'v_faction')}:** {faction}"),
         discord.ui.Separator(),
+        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_limit')}**"), accessory=discord.ui.Button(emoji="♾️", custom_id=f"voice:limit:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_bump')}**"), accessory=discord.ui.Button(emoji="⬆️", custom_id=f"voice:bump:{voice.id}", style=discord.ButtonStyle.secondary)),
+        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_invite')}**"), accessory=discord.ui.Button(emoji="➕", custom_id=f"voice:invite:{voice.id}", style=discord.ButtonStyle.secondary)),
+        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_transfer')}**"), accessory=discord.ui.Button(emoji="⏩", custom_id=f"voice:transfer:{voice.id}", style=discord.ButtonStyle.secondary)),
+        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_kick')}**"), accessory=discord.ui.Button(emoji="❌", custom_id=f"voice:kick:{voice.id}", style=discord.ButtonStyle.secondary)),
+        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_block')}**"), accessory=discord.ui.Button(emoji="🚫", custom_id=f"voice:block:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_serverid')}**\n`{server_id}` • {faction}"), accessory=discord.ui.Button(emoji="🖥️", custom_id=f"voice:serverid:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Separator(),
         discord.ui.TextDisplay(f"**{t_sync(lang, 'v_filters')}**"),

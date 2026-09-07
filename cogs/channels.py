@@ -6,6 +6,8 @@ from database import db
 
 MODULES = {
     "tickets": ("ticket_panel_channel", "m_tickets", "t_text"),
+    "ticket_category": ("ticket_category", "chm_ticket_cat", "t_cat"),
+    "ticket_archive": ("ticket_archive_category", "chm_ticket_archive", "t_cat"),
     "search": ("search_channel", "m_search", "t_text"),
     "clans": ("clan_channel", "m_clans", "t_forum"),
     "voice_lobby": ("voice_lobby", "chm_voice_lobby", "t_voice"),
@@ -50,6 +52,8 @@ class Channels(commands.Cog):
     @app_commands.describe(module="Модуль", channel="Канал (выбери или вставь ID через выбор)")
     @app_commands.choices(module=[
         app_commands.Choice(name="🎫 Tickets / Тикеты", value="tickets"),
+        app_commands.Choice(name="📁 Ticket category / Категория тикетов", value="ticket_category"),
+        app_commands.Choice(name="🗃 Ticket archive / Архив тикетов", value="ticket_archive"),
         app_commands.Choice(name="🔍 Search / Поиск", value="search"),
         app_commands.Choice(name="👑 Clans / Кланы", value="clans"),
         app_commands.Choice(name="🔊 Voice lobby / Войс-лобби", value="voice_lobby"),
@@ -75,7 +79,7 @@ class Channels(commands.Cog):
             ok = isinstance(channel, (discord.TextChannel, discord.ForumChannel))
         elif module == "voice_lobby":
             ok = isinstance(channel, discord.VoiceChannel)
-        elif module == "voice_category":
+        elif module in ("voice_category", "ticket_category", "ticket_archive"):
             ok = isinstance(channel, discord.CategoryChannel)
         if not ok:
             await interaction.response.send_message(t_sync(lang, "ch_badtype").format(label=label), ephemeral=True)
