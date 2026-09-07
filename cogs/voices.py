@@ -18,13 +18,7 @@ def build_voice_panel(owner: discord.Member, voice: discord.VoiceChannel, filt_g
     c = discord.ui.Container(
         discord.ui.TextDisplay(f"## {t_sync(lang, 'v_title')}\n**{t_sync(lang, 'v_owner')}:** {owner.mention}\n**{t_sync(lang, 'v_room')}:** 🔊 {voice.name}\n**{t_sync(lang, 'v_server')}:** `{server_id}` • **{t_sync(lang, 'v_faction')}:** {faction}"),
         discord.ui.Separator(),
-        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_rename')}**"), accessory=discord.ui.Button(emoji="🧾", custom_id=f"voice:rename:{voice.id}", style=discord.ButtonStyle.secondary)),
-        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_limit')}**"), accessory=discord.ui.Button(emoji="♾️", custom_id=f"voice:limit:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_bump')}**"), accessory=discord.ui.Button(emoji="⬆️", custom_id=f"voice:bump:{voice.id}", style=discord.ButtonStyle.secondary)),
-        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_invite')}**"), accessory=discord.ui.Button(emoji="➕", custom_id=f"voice:invite:{voice.id}", style=discord.ButtonStyle.secondary)),
-        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_transfer')}**"), accessory=discord.ui.Button(emoji="⏩", custom_id=f"voice:transfer:{voice.id}", style=discord.ButtonStyle.secondary)),
-        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_kick')}**"), accessory=discord.ui.Button(emoji="❌", custom_id=f"voice:kick:{voice.id}", style=discord.ButtonStyle.secondary)),
-        discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_block')}**"), accessory=discord.ui.Button(emoji="🚫", custom_id=f"voice:block:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_serverid')}**\n`{server_id}` • {faction}"), accessory=discord.ui.Button(emoji="🖥️", custom_id=f"voice:serverid:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Separator(),
         discord.ui.TextDisplay(f"**{t_sync(lang, 'v_filters')}**"),
@@ -110,6 +104,10 @@ class VoiceModal(discord.ui.Modal):
                     async with db.conn() as dbc:
                         await dbc.execute("UPDATE temp_voices SET owner_id=? WHERE guild_id=? AND voice_id=?", (m.id, guild.id, voice.id))
                         await dbc.commit()
+                    try:
+                        await voice.edit(name=f"🔊 {m.display_name}"[:100])
+                    except Exception:
+                        pass
                     await refresh_panel(interaction, voice, new_owner=m)
                     await interaction.response.send_message(t_sync(lang, "vr_newowner").format(user=m.mention), ephemeral=True)
                 else: await interaction.response.send_message(t_sync(lang, "vr_nouser"), ephemeral=True)
@@ -327,15 +325,14 @@ class Voices(commands.Cog):
                                           (new_owner.id, guild.id, before.channel.id))
                         await dbc.commit()
                         try:
-                            from utils.i18n import get_lang as _tgl, t_sync as _tt
-                            _lang = await _tgl(guild.id)
+                            await before.channel.edit(name=f"🔊 {new_owner.display_name}"[:100])
+                        except Exception:
+                            pass
+                        try:
                             await refresh_panel(None, before.channel, new_owner=new_owner)
-                            await before.channel.send(_tt(_lang, "vr_transferred").format(old=member.mention, new=new_owner.mention))
                         except Exception:
                             pass
                         vlog.info(f"voice {before.channel.id} owner {member} -> {new_owner}")
-                        from utils.alog import send_log as _slog2
-                        await _slog2(guild, f"👑 Войс `{before.channel.name}`: владелец {member.mention} → {new_owner.mention}")
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
