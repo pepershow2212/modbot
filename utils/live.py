@@ -11,6 +11,12 @@ SEARCH_NAMES = ("поиск отряда", "поиск-отряда", "squad sea
 CLAN_NAMES = ("набор в клан", "набор-в-клан", "clan recruitment", "clan-recruitment", "clan rekrutierung")
 LOBBY_NAMES = ("создать комнату", "create room", "raum erstellen")
 VOICE_CAT_NAMES = ("приватный войс", "private voice", "privater voice")
+STAFF_EXACT = ("Support",)
+STAFF_NEEDLES = ("support", "саппорт")
+NOT_STAFF_ROLES = (
+    "пользователь", "member", "members", "verified", "верифиц",
+    "everyone", "новичок", "игрок", "player", "гость",
+)
 ID_KEYS = (
     "ticket_panel_channel", "ticket_category", "ticket_archive_category",
     "ticket_staff_role", "ticket_senior_role",
@@ -62,6 +68,96 @@ def is_lobby_channel(ch, g: dict | None = None) -> bool:
     if not isinstance(ch, discord.VoiceChannel) or not g:
         return False
     return ch.id == _iid(g.get("voice_lobby"))
+
+
+def is_ticket_staff_role(role) -> bool:
+    if not isinstance(role, discord.Role) or role.is_default():
+        return False
+    if _has(role.name, *NOT_STAFF_ROLES):
+        return False
+    if role.name in STAFF_EXACT:
+        return True
+    return _has(role.name, *STAFF_NEEDLES)
+
+
+def find_ticket_staff(guild: discord.Guild):
+    for name in STAFF_EXACT:
+        role = discord.utils.get(guild.roles, name=name)
+        if is_ticket_staff_role(role):
+            return role
+    for role in guild.roles:
+        if is_ticket_staff_role(role) and "senior" not in (role.name or "").casefold():
+            return role
+    return None
+
+
+def find_ticket_senior(guild: discord.Guild):
+    role = discord.utils.get(guild.roles, name="Senior Support")
+    if isinstance(role, discord.Role):
+        return role
+    return next((r for r in guild.roles if _has(r.name, "senior support", "старший саппорт", "старший support")), None)
+
+
+def ticket_private_overwrites(guild: discord.Guild, owner, staff, category, senior=None, keep_members=()):
+    """Только автор + Support (+ старший). Категорийные роли вроде «Пользователь» — запрет."""
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, manage_channels=True,
+            read_message_history=True, embed_links=True, attach_files=True,
+        ),
+    }
+    if owner is not None:
+        overwrites[owner] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
+        )
+    if is_ticket_staff_role(staff):
+        overwrites[staff] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
+        )
+    keep_ids = {guild.me.id}
+    if owner is not None:
+        keep_ids.add(owner.id)
+    keep_ids.update(getattr(m, "id", 0) for m in keep_members)
+    if is_ticket_staff_role(staff):
+        keep_ids.add(staff.id)
+    senior_ok = (
+        isinstance(senior, discord.Role)
+        and senior != staff
+        and ("senior" in (senior.name or "").casefold() or "старший" in (senior.name or "").casefold())
+    )
+    if senior_ok:
+        overwrites[senior] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
+        )
+        keep_ids.add(senior.id)
+    if isinstance(category, discord.CategoryChannel):
+        for target, _ow in (category.overwrites or {}).items():
+            tid = getattr(target, "id", 0)
+            if tid in keep_ids or target in overwrites:
+                continue
+            overwrites[target] = discord.PermissionOverwrite(view_channel=False)
+    for role in guild.roles:
+        if role.id in keep_ids or role in overwrites or role.is_default():
+            continue
+        if _has(role.name, *NOT_STAFF_ROLES):
+            overwrites[role] = discord.PermissionOverwrite(view_channel=False)
+    return overwrites
+
+
+async def harden_ticket_channel(channel: discord.TextChannel, owner, staff, senior=None):
+    keep = []
+    for target, ow in (channel.overwrites or {}).items():
+        if isinstance(target, (discord.Member, discord.User)) and ow.view_channel is True:
+            if owner is None or target.id != getattr(owner, "id", 0):
+                keep.append(target)
+    try:
+        await channel.edit(
+            overwrites=ticket_private_overwrites(channel.guild, owner, staff, channel.category, senior, keep),
+            reason="WARDOGS: тикет только для автора и Support",
+        )
+    except Exception:
+        pass
 
 
 def _find_search(guild: discord.Guild):
@@ -177,6 +273,17 @@ async def conf(guild: discord.Guild) -> dict:
         ch = _pick_named(texts, "мод логи", "mod logs", "мод-логи", "mod-logs")
         if ch:
             patch["mod_log_channel"] = ch.id
+
+    cur_staff = guild.get_role(_iid(g.get("ticket_staff_role")))
+    if not is_ticket_staff_role(cur_staff):
+        staff = find_ticket_staff(guild)
+        if staff:
+            patch["ticket_staff_role"] = staff.id
+    cur_senior = guild.get_role(_iid(g.get("ticket_senior_role")))
+    if cur_senior is None:
+        senior = find_ticket_senior(guild)
+        if senior:
+            patch["ticket_senior_role"] = senior.id
 
     if patch:
         await db.set_guild(guild.id, **patch)

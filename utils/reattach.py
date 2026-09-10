@@ -22,6 +22,10 @@ HISTORY_LIMIT = 40
 
 ROLE_SUPPORT = ("Support",)
 ROLE_SENIOR = ("Senior Support",)
+NOT_STAFF_ROLES = (
+    "пользователь", "member", "members", "verified", "верифиц",
+    "everyone", "новичок", "игрок", "player",
+)
 ROLE_LEADER = ("Лидер клана", "Clan Leader", "Clan-Anführer")
 FACTION_ROLES = {
     "faction_role_lonestar": "LONESTAR",
@@ -311,25 +315,11 @@ async def reattach_guild(
             updates["welcome_channel"] = ch.id
             found["welcome_channel"] = ch.name
 
-    # роли
-    if _need_role(guild, g, "ticket_staff_role"):
-        role = next((r for n in ROLE_SUPPORT for r in [discord.utils.get(guild.roles, name=n)] if r), None)
-        if role is None:
-            role = next((r for r in guild.roles if _has(r.name, "support", "саппорт") and r.name != guild.default_role.name), None)
-        if role is None:
-            sample = existing_tickets[:3]
-            panel = _alive_ch(guild, updates.get("ticket_panel_channel") or g.get("ticket_panel_channel"))
-            if isinstance(panel, discord.TextChannel):
-                sample.append(panel)
-            for tch in sample:
-                for target, ow in (tch.overwrites or {}).items():
-                    if isinstance(target, discord.Role) and target.is_default():
-                        continue
-                    if isinstance(target, discord.Role) and ow.view_channel is True and not target.permissions.administrator:
-                        role = target
-                        break
-                if role:
-                    break
+    # роли — только Support, не «Пользователь» и не любая роль категории
+    from utils.live import find_ticket_staff, is_ticket_staff_role
+    cur_staff = _alive_role(guild, g.get("ticket_staff_role"))
+    if not is_ticket_staff_role(cur_staff):
+        role = find_ticket_staff(guild)
         if role:
             updates["ticket_staff_role"] = role.id
             found["ticket_staff_role"] = role.name
@@ -571,6 +561,20 @@ async def reattach_guild(
                 found[f"voice:{vc.id}"] = vc.name
 
         await dbc.commit()
+
+    from utils.live import find_ticket_senior, find_ticket_staff, harden_ticket_channel, is_ticket_staff_role
+    staff_role = _alive_role(guild, g.get("ticket_staff_role"))
+    if not is_ticket_staff_role(staff_role):
+        staff_role = find_ticket_staff(guild)
+    senior_role = _alive_role(guild, g.get("ticket_senior_role")) or find_ticket_senior(guild)
+    for ch in ticket_channels:
+        if ch.id == (g.get("ticket_panel_channel") or 0):
+            continue
+        if ch.id == (g.get("admin_log_channel") or 0):
+            continue
+        owner_id = _ticket_owner_id(ch, me_id, staff_ids)
+        owner = guild.get_member(owner_id) if owner_id else None
+        await harden_ticket_channel(ch, owner, staff_role, senior_role)
 
     if max_ticket_num > int(g.get("ticket_counter") or 0):
         await db.set_guild(guild.id, ticket_counter=max_ticket_num)
