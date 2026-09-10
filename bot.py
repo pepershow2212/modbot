@@ -52,6 +52,48 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
+async def sync_slash_commands():
+    """Replace Discord slash list with this bot's commands.
+
+    Leftover /summary /ask from WARDOGS AI stay on this app until a full
+    global + per-guild PUT. Guild sync alone is not enough if the stale
+    command was registered globally.
+    """
+    names = []
+    global_cmds = await bot.tree.sync()
+    names.extend(sorted({cmd.name for cmd in global_cmds}))
+    log.info(f"slash global={[cmd.name for cmd in global_cmds]}")
+    synced_guilds = []
+    for guild in bot.guilds:
+        bot.tree.clear_commands(guild=guild)
+        bot.tree.copy_global_to(guild=guild)
+        guild_cmds = await bot.tree.sync(guild=guild)
+        synced_guilds.append(str(guild.id))
+        names.extend(cmd.name for cmd in guild_cmds)
+        log.info(f"slash guild={guild.id} names={[cmd.name for cmd in guild_cmds]}")
+    unique = sorted(set(names))
+    print(f"🔄 Slash sync guilds={', '.join(synced_guilds) or 'none'} cmds={', '.join(unique) or 'none'}", flush=True)
+    log.info(f"slash synced guilds={synced_guilds} cmds={unique}")
+    return unique
+
+
+@bot.command(name="syncslash")
+@commands.has_permissions(administrator=True)
+async def syncslash_cmd(ctx: commands.Context):
+    """Admin fallback when slash menu is stuck on leftover /summary."""
+    try:
+        names = await sync_slash_commands()
+        await ctx.send(
+            "Slash перезаписан. Пиши `/help` у **WARDOGS MANAGER**.\n"
+            f"Команды: `{', '.join(names) or 'нет'}`\n"
+            "-# `/ask` `/summary` — это WARDOGS AI, не этот бот.",
+            delete_after=30,
+        )
+    except Exception as e:
+        log.warning(f"slash sync failed: {e}")
+        await ctx.send(f"Не смог синкнуть slash: `{e}`", delete_after=20)
+
+
 @bot.event
 async def on_ready():
     await db.init_db()
@@ -90,17 +132,7 @@ async def on_ready():
             log.warning(f"reattach failed: {e}")
             print(f"⚠️ Не смог сам найти старые панели: {e}", flush=True)
     try:
-        synced = []
-        for guild in bot.guilds:
-            bot.tree.copy_global_to(guild=guild)
-            await bot.tree.sync(guild=guild)
-            synced.append(str(guild.id))
-        if not synced:
-            await bot.tree.sync()
-            print("🔄 Глобальный синк команд", flush=True)
-        else:
-            print(f"🔄 Синк slash на серверы: {', '.join(synced)}", flush=True)
-            log.info(f"slash synced guilds={synced}")
+        await sync_slash_commands()
     except Exception as e:
         print("⚠️ Sync error:", e)
         log.warning(f"slash sync failed: {e}")

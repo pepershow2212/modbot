@@ -23,6 +23,7 @@ class Help(commands.Cog):
                 "`/channels` • `/setchannel` — привязки • `/setbanner` — баннер\n"
                 "`/post_tickets` • `/post_search` • `/post_clans` — панели\n"
                 "`/stats` • `/ping` • `/warns`\n"
+                "`!syncslash` — если меню `/` залипло на чужих командах\n"
                 f"-# {t_sync(lang, 'help_hint')}"
             ),
             accent_color=0xFFC800,
