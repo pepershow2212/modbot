@@ -16,7 +16,13 @@ def build_voice_panel(owner: discord.Member, voice: discord.VoiceChannel, filt_g
     from utils.i18n import t_sync
     v = discord.ui.LayoutView(timeout=None)
     c = discord.ui.Container(
-        discord.ui.TextDisplay(f"## {t_sync(lang, 'v_title')}\n**{t_sync(lang, 'v_owner')}:** {owner.mention}\n**{t_sync(lang, 'v_room')}:** 🔊 {voice.name}\n**{t_sync(lang, 'v_server')}:** `{server_id}` • **{t_sync(lang, 'v_faction')}:** {faction}"),
+        discord.ui.TextDisplay(
+            f"## {t_sync(lang, 'v_title')}\n"
+            f"**{t_sync(lang, 'v_owner')}:** {owner.mention}\n"
+            f"**{t_sync(lang, 'v_room')}:** 🔊 {voice.name}\n"
+            f"**{t_sync(lang, 'v_server')}:** `{server_id}` • **{t_sync(lang, 'v_faction')}:** {faction}\n"
+            f"**{t_sync(lang, 'v_filters')}:** {filt_game} • {filt_18} • {filt_hours}"
+        ),
         discord.ui.Separator(),
         discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_limit')}**"), accessory=discord.ui.Button(emoji="♾️", custom_id=f"voice:limit:{voice.id}", style=discord.ButtonStyle.secondary)),
         discord.ui.Section(discord.ui.TextDisplay(f"**{t_sync(lang, 'v_bump')}**"), accessory=discord.ui.Button(emoji="⬆️", custom_id=f"voice:bump:{voice.id}", style=discord.ButtonStyle.secondary)),
@@ -178,6 +184,13 @@ async def resolve_member(guild: discord.Guild, text: str):
     return None
 
 
+def _row_get(row, key, default="—"):
+    try:
+        return row[key] or default
+    except Exception:
+        return default
+
+
 async def refresh_panel(interaction: discord.Interaction, voice: discord.VoiceChannel, new_owner=None):
     async with db.conn() as dbc:
         dbc.row_factory = aiosqlite.Row
@@ -188,14 +201,11 @@ async def refresh_panel(interaction: discord.Interaction, voice: discord.VoiceCh
     owner = new_owner or voice.guild.get_member(row["owner_id"])
     if not owner:
         return
-    try:
-        server_id = row["server_id"] or "—"
-    except Exception:
-        server_id = "—"
-    try:
-        faction = row["faction"] or "—"
-    except Exception:
-        faction = "—"
+    server_id = _row_get(row, "server_id")
+    faction = _row_get(row, "faction")
+    filt_game = _row_get(row, "gamemode")
+    filt_18 = _row_get(row, "age_filter")
+    filt_hours = _row_get(row, "hours_filter")
     from utils.i18n import get_lang
     lang = await get_lang(voice.guild.id)
     # отдельный #комнаты-текст больше не создаём — только встроенный чат войса.
@@ -206,7 +216,7 @@ async def refresh_panel(interaction: discord.Interaction, voice: discord.VoiceCh
             async for msg in text_ch.history(limit=5):
                 if msg.author == voice.guild.me:
                     try:
-                        await msg.edit(view=build_voice_panel(owner, voice, server_id=server_id, faction=faction, lang=lang))
+                        await msg.edit(view=build_voice_panel(owner, voice, filt_game=filt_game, filt_18=filt_18, filt_hours=filt_hours, server_id=server_id, faction=faction, lang=lang))
                         break
                     except Exception:
                         continue
@@ -217,7 +227,7 @@ async def refresh_panel(interaction: discord.Interaction, voice: discord.VoiceCh
         async for msg in voice.history(limit=10):
             if msg.author == voice.guild.me:
                 try:
-                    await msg.edit(view=build_voice_panel(owner, voice, server_id=server_id, faction=faction, lang=lang))
+                    await msg.edit(view=build_voice_panel(owner, voice, filt_game=filt_game, filt_18=filt_18, filt_hours=filt_hours, server_id=server_id, faction=faction, lang=lang))
                     break
                 except Exception:
                     continue
@@ -249,18 +259,36 @@ async def handle_voice_select(interaction: discord.Interaction, cid: str):
         from utils.i18n import t_sync, get_lang as _tgl
         lang = await _tgl(interaction.guild.id)
         val = interaction.data["values"][0]
-        # сохранить режим игры
+        vid = int(cid.split(":")[-1])
+        col = None
         if cid.startswith("voice:fgame:"):
+            col = "gamemode"
+        elif cid.startswith("voice:f18:"):
+            col = "age_filter"
+        elif cid.startswith("voice:fhours:"):
+            col = "hours_filter"
+        if col:
             try:
-                vid = int(cid.split(":")[-1])
                 async with db.conn() as dbc:
-                    await dbc.execute("UPDATE temp_voices SET gamemode=? WHERE guild_id=? AND voice_id=?", (val, interaction.guild.id, vid))
+                    await dbc.execute(
+                        f"UPDATE temp_voices SET {col}=? WHERE guild_id=? AND voice_id=?",
+                        (val, interaction.guild.id, vid),
+                    )
                     await dbc.commit()
             except Exception:
                 pass
+            voice = interaction.guild.get_channel(vid)
+            if isinstance(voice, discord.VoiceChannel):
+                try:
+                    await refresh_panel(interaction, voice)
+                except Exception:
+                    pass
         await interaction.response.send_message(t_sync(lang, "vr_filter").format(v=val), ephemeral=True)
     except (discord.errors.InteractionResponded, discord.errors.HTTPException, discord.errors.NotFound):
         pass
+
+
+_creating: set[tuple[int, int]] = set()
 
 
 class Voices(commands.Cog):
@@ -271,41 +299,75 @@ class Voices(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         import logging
         vlog = logging.getLogger("wardogs.voice")
+        if member.bot:
+            return
         guild = member.guild
-        from utils.live import conf
+        from utils.live import conf, is_lobby_channel
         g = await conf(guild)
-        lobby_id = g.get("voice_lobby")
-        vlog.info(f"voice_update {member} before={before.channel.id if before.channel else None} after={after.channel.id if after.channel else None} lobby={lobby_id}")
+        lobby_id = int(g.get("voice_lobby") or 0)
+        vlog.info(
+            f"voice_update {member} before={before.channel.id if before.channel else None} "
+            f"after={after.channel.id if after.channel else None} lobby={lobby_id}"
+        )
+        joined_lobby = after.channel is not None and is_lobby_channel(after.channel, g)
         # зашёл в лобби → создать приват (панель ТОЛЬКО во встроенный чат войса)
-        if after.channel and lobby_id and after.channel.id == lobby_id and await db.is_on(guild.id, "voices"):
-            vcat = guild.get_channel(g.get("voice_category") or 0)
-            try:
-                vc = await guild.create_voice_channel(f"🔊 {member.display_name}", category=vcat if isinstance(vcat, discord.CategoryChannel) else None, reason="temp voice")
-                await member.move_to(vc)
-                async with db.conn() as dbc:
-                    await dbc.execute("INSERT OR REPLACE INTO temp_voices(guild_id, voice_id, text_id, owner_id) VALUES(?,?,?,?)", (guild.id, vc.id, 0, member.id))
-                    await dbc.commit()
-                try:
-                    from utils.i18n import get_lang as _gl
-                    _lang = await _gl(guild.id)
-                    await vc.send(view=build_voice_panel(member, vc, lang=_lang))
-                    vlog.info(f"panel posted into voice chat {vc.id} for {member}")
-                except Exception as e:
-                    vlog.warning(f"voice-chat send failed {vc.id}: {e}")
-                    # фолбэк: если войс-чат недоступен — кинуть панель в лички владельцу
+        if joined_lobby:
+            if not await db.is_on(guild.id, "voices"):
+                vlog.warning(f"voices module off, skip create for {member}")
+            else:
+                key = (guild.id, member.id)
+                if key not in _creating:
+                    _creating.add(key)
                     try:
-                        from utils.i18n import t_sync as _tt
-                        await member.send(_tt(_lang, "vr_dm_fallback"), view=build_voice_panel(member, vc, lang=_lang))
-                    except Exception:
-                        pass
-                vlog.info(f"created temp voice {vc.id} for {member}")
-                from utils.alog import send_log
-                await send_log(guild, f"🔊 Войс `{vc.name}` создал {member.mention}")
-            except Exception as e:
-                vlog.exception(f"voice create error for {member}: {e}")
+                        vcat = after.channel.category
+                        if not isinstance(vcat, discord.CategoryChannel):
+                            try:
+                                vcat = guild.get_channel(int(g.get("voice_category") or 0))
+                            except (TypeError, ValueError):
+                                vcat = None
+                        kw = {
+                            "name": f"🔊 {member.display_name}"[:100],
+                            "category": vcat if isinstance(vcat, discord.CategoryChannel) else None,
+                            "reason": "temp voice",
+                        }
+                        region = getattr(after.channel, "rtc_region", None)
+                        if region is not None:
+                            kw["rtc_region"] = region
+                        vc = await guild.create_voice_channel(**kw)
+                        try:
+                            await member.move_to(vc)
+                        except Exception as e:
+                            vlog.warning(f"move_to failed {member} -> {vc.id}: {e}")
+                        async with db.conn() as dbc:
+                            await dbc.execute(
+                                "INSERT INTO temp_voices(guild_id, voice_id, text_id, owner_id) VALUES(?,?,?,?) "
+                                "ON CONFLICT(guild_id, voice_id) DO UPDATE SET owner_id=excluded.owner_id",
+                                (guild.id, vc.id, 0, member.id),
+                            )
+                            await dbc.commit()
+                        try:
+                            from utils.i18n import get_lang as _gl
+                            _lang = await _gl(guild.id)
+                            await vc.send(view=build_voice_panel(member, vc, lang=_lang))
+                            vlog.info(f"panel posted into voice chat {vc.id} for {member}")
+                        except Exception as e:
+                            vlog.warning(f"voice-chat send failed {vc.id}: {e}")
+                            try:
+                                from utils.i18n import t_sync as _tt, get_lang as _gl2
+                                _lang = await _gl2(guild.id)
+                                await member.send(_tt(_lang, "vr_dm_fallback"), view=build_voice_panel(member, vc, lang=_lang))
+                            except Exception:
+                                pass
+                        vlog.info(f"created temp voice {vc.id} for {member}")
+                        from utils.alog import send_log
+                        await send_log(guild, f"🔊 Войс `{vc.name}` создал {member.mention}")
+                    except Exception as e:
+                        vlog.exception(f"voice create error for {member}: {e}")
+                    finally:
+                        _creating.discard(key)
         # чистка пустых приваток (отдельных #комнат больше нет — удаляем только войс + старый текст если остался)
         # + автопередача: вышел владелец, а люди остались → владелец = первый оставшийся
-        if before.channel and before.channel.id != lobby_id:
+        if before.channel and not is_lobby_channel(before.channel, g):
             async with db.conn() as dbc:
                 dbc.row_factory = aiosqlite.Row
                 async with dbc.execute("SELECT * FROM temp_voices WHERE guild_id=? AND voice_id=?", (guild.id, before.channel.id)) as cur:

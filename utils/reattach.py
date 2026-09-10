@@ -255,19 +255,31 @@ async def reattach_guild(
             updates["clan_channel"] = ch.id
             found["clan_channel"] = ch.name
 
-    if _need_ch(guild, g, "voice_category"):
-        ch = _pick_named(cats, "приватный войс", "private voice", "privater voice", "🔊")
+    lobby_hit = _pick_named(voices, "создать комнату", "create room", "raum erstellen")
+    if lobby_hit is None:
+        lobby_hit = next((v for v in voices if (v.name or "").startswith("➕")), None)
+    cur_lobby = _alive_ch(guild, g.get("voice_lobby"))
+    need_lobby = cur_lobby is None or (
+        isinstance(cur_lobby, discord.VoiceChannel)
+        and not (_has(cur_lobby.name, "создать комнату", "create room", "raum erstellen") or (cur_lobby.name or "").startswith("➕"))
+    )
+    if need_lobby and isinstance(lobby_hit, discord.VoiceChannel):
+        updates["voice_lobby"] = lobby_hit.id
+        found["voice_lobby"] = lobby_hit.name
+        if lobby_hit.category:
+            updates["voice_category"] = lobby_hit.category.id
+            found["voice_category"] = lobby_hit.category.name
+
+    if "voice_category" not in updates and _need_ch(guild, g, "voice_category"):
+        ch = None
+        live_lobby = lobby_hit if isinstance(lobby_hit, discord.VoiceChannel) else cur_lobby
+        if isinstance(live_lobby, discord.VoiceChannel) and live_lobby.category:
+            ch = live_lobby.category
+        if ch is None:
+            ch = _pick_named(cats, "приватный войс", "private voice", "privater voice")
         if isinstance(ch, discord.CategoryChannel):
             updates["voice_category"] = ch.id
             found["voice_category"] = ch.name
-
-    if _need_ch(guild, g, "voice_lobby"):
-        ch = _pick_named(voices, "создать комнату", "create room", "raum erstellen")
-        if ch is None:
-            ch = next((v for v in voices if v.name.startswith("➕")), None)
-        if isinstance(ch, discord.VoiceChannel):
-            updates["voice_lobby"] = ch.id
-            found["voice_lobby"] = ch.name
 
     if _need_ch(guild, g, "admin_log_channel"):
         ch = _pick_named(text_chs, "admin logs", "admin-logs", "логи-сервера", "логи сервера", exclude=("мод", "mod"))
@@ -521,12 +533,13 @@ async def reattach_guild(
             vc = guild.get_channel(vid)
             if not isinstance(vc, discord.VoiceChannel) or vc.id == lobby_id:
                 continue
+            if _has(vc.name, "создать комнату", "create room", "raum erstellen") or (vc.name or "").startswith("➕"):
+                continue
             cur = await dbc.execute(
                 "SELECT voice_id FROM temp_voices WHERE guild_id=? AND voice_id=?",
                 (guild.id, vc.id),
             )
-            if await cur.fetchone():
-                continue
+            existed = await cur.fetchone()
             owner_id = 0
             humans = [m for m in vc.members if not m.bot]
             if humans:
@@ -539,12 +552,23 @@ async def reattach_guild(
                     if _norm(member.display_name) and _norm(member.display_name) in low:
                         owner_id = member.id
                         break
+            sid, fac = "", ""
+            try:
+                from utils.live import parse_voice_status
+                sid, fac = parse_voice_status(getattr(vc, "status", None))
+            except Exception:
+                pass
             await dbc.execute(
-                "INSERT OR REPLACE INTO temp_voices(guild_id, voice_id, text_id, owner_id) VALUES(?,?,?,?)",
-                (guild.id, vc.id, 0, owner_id),
+                "INSERT INTO temp_voices(guild_id, voice_id, text_id, owner_id, server_id, faction) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(guild_id, voice_id) DO UPDATE SET "
+                "owner_id=CASE WHEN excluded.owner_id!=0 THEN excluded.owner_id ELSE temp_voices.owner_id END, "
+                "server_id=CASE WHEN excluded.server_id NOT IN ('', '—') THEN excluded.server_id ELSE temp_voices.server_id END, "
+                "faction=CASE WHEN excluded.faction NOT IN ('', '—') THEN excluded.faction ELSE temp_voices.faction END",
+                (guild.id, vc.id, 0, owner_id, sid or "—", fac or "—"),
             )
-            voices_n += 1
-            found[f"voice:{vc.id}"] = vc.name
+            if not existed:
+                voices_n += 1
+                found[f"voice:{vc.id}"] = vc.name
 
         await dbc.commit()
 

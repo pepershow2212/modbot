@@ -65,7 +65,7 @@ async def build_setup_view(guild: discord.Guild) -> discord.ui.LayoutView:
     lang = await get_lang(guild.id)
     T = lambda k: t_sync(lang, k)
     g = await db.get_guild(guild.id)
-    states = {k: bool(g.get(col, 1)) for k, col in db.TOGGLES.items()}
+    states = {k: db.flag_on(g, k) for k in db.TOGGLES}
     installed = await installed_map(guild)
 
     view = discord.ui.LayoutView(timeout=300)
@@ -524,21 +524,27 @@ class Setup(commands.Cog):
 
     async def install_voices(self, guild: discord.Guild) -> str:
         from utils.i18n import get_lang, t_sync
+        from utils.live import find_lobby, find_voice_category
         g = await db.get_guild(guild.id)
         lang = await get_lang(guild.id)
         T = lambda k: t_sync(lang, k)
-        vcat = guild.get_channel(g.get("voice_category") or 0)
+        lobby = find_lobby(guild)
+        if lobby is None:
+            try:
+                lobby = guild.get_channel(int(g.get("voice_lobby") or 0))
+            except (TypeError, ValueError):
+                lobby = None
+        vcat = find_voice_category(guild, lobby if isinstance(lobby, discord.VoiceChannel) else None)
+        if vcat is None:
+            try:
+                vcat = guild.get_channel(int(g.get("voice_category") or 0))
+            except (TypeError, ValueError):
+                vcat = None
         if not isinstance(vcat, discord.CategoryChannel):
             vcat = await guild.create_category(T("ch_voice_cat"))
-        else:
-            await self._rename(vcat, T("ch_voice_cat"))
-        # отдельных #комнат-текст больше не создаём — панель живёт в чате войса
-        lobby = guild.get_channel(g.get("voice_lobby") or 0)
         if not isinstance(lobby, discord.VoiceChannel):
             lobby = await guild.create_voice_channel(T("ch_lobby"), category=vcat, user_limit=1)
-        else:
-            await self._rename(lobby, T("ch_lobby"))
-        await db.set_guild(guild.id, voice_category=vcat.id, voice_text_category=0, voice_lobby=lobby.id)
+        await db.set_guild(guild.id, voice_category=vcat.id, voice_text_category=0, voice_lobby=lobby.id, en_voices=1)
         return f"Войсы → лобби {lobby.name} (панель в чате войса)"
 
     async def install_logs(self, guild: discord.Guild) -> str:

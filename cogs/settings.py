@@ -32,7 +32,7 @@ def build_settings_view(states: dict, lang: str = "ru") -> discord.ui.LayoutView
 
 async def current_states(guild_id: int) -> dict:
     g = await db.get_guild(guild_id)
-    return {k: bool(g.get(col, 1)) for k, col in db.TOGGLES.items()}
+    return {k: db.flag_on(g, k) for k in db.TOGGLES}
 
 
 class Settings(commands.Cog):

@@ -194,9 +194,17 @@ async def handle_party_button(interaction: discord.Interaction, custom_id: str, 
             ))
             await interaction.response.send_message(view=v, ephemeral=True)
         elif custom_id == "party:mkvoice":
-            # быстрый пати-войс
-            cat = interaction.guild.categories[0] if interaction.guild.categories else None
-            vc = await interaction.guild.create_voice_channel(f"{t_sync(lang, 'party_pref')}{interaction.user.display_name}", category=cat, reason="party voice")
+            # быстрый пати-войс — в ту же категорию, что и приватки
+            from utils.live import conf, find_voice_category
+            g = await conf(interaction.guild)
+            cat = interaction.guild.get_channel(int(g.get("voice_category") or 0) or 0)
+            if not isinstance(cat, discord.CategoryChannel):
+                cat = find_voice_category(interaction.guild)
+            vc = await interaction.guild.create_voice_channel(
+                f"{t_sync(lang, 'party_pref')}{interaction.user.display_name}",
+                category=cat if isinstance(cat, discord.CategoryChannel) else None,
+                reason="party voice",
+            )
             await interaction.response.send_message(t_sync(lang, "ps_mkvoice").format(ch=vc.mention), ephemeral=True)
         elif custom_id == "party:joininfo":
             await interaction.response.send_message(t_sync(lang, "ps_joininfo"), ephemeral=True)
