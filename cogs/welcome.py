@@ -45,7 +45,7 @@ class Welcome(commands.Cog):
             try:
                 import asyncio
                 from utils.welcome_card import render_welcome_card
-                avatar_bytes = await member.display_avatar.with_size(256).read()
+                avatar_bytes = await member.display_avatar.with_size(512).read()
                 loop = asyncio.get_running_loop()
                 buf = await loop.run_in_executor(
                     None,
