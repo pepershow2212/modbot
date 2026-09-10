@@ -11,7 +11,7 @@ ASSETS = ROOT / "assets"
 
 # финальный размер; рисуем в 2x и уменьшаем — края круга без зубцов
 SCALE = 2
-W, H = 1200 * SCALE, 520 * SCALE
+W, H = 1200 * SCALE, 560 * SCALE
 AVATAR = 248 * SCALE
 GOLD = (232, 180, 48, 255)
 HELLO = (168, 168, 168, 255)
@@ -101,7 +101,9 @@ def render_welcome_card(avatar_bytes: bytes, username: str, hello: str) -> io.By
     name_y = ay + avatar.height + 28 * SCALE
     draw.text((W // 2, name_y), name, font=name_font, fill=GOLD, anchor="mt")
 
-    hello_y = name_y + int(getattr(name_font, "size", 72) * 0.95) + 2 * SCALE
+    nb = name_font.getbbox(name)
+    name_h = nb[3] - nb[1]
+    hello_y = name_y + name_h + 18 * SCALE
     draw.text((W // 2, hello_y), hello, font=hello_font, fill=HELLO, anchor="mt")
 
     final = base.convert("RGB").resize((W // SCALE, H // SCALE), Image.Resampling.LANCZOS)
