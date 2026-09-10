@@ -125,6 +125,29 @@ def _pick_named(channels, *needles: str, cls=None, exclude: tuple[str, ...] = ()
     return None
 
 
+def peek_modules(guild: discord.Guild) -> dict[str, bool]:
+    """Быстрая проверка по именам — для галок в /setupbot, без записи в БД."""
+    texts = [c for c in guild.channels if isinstance(c, discord.TextChannel)]
+    forums = [c for c in guild.channels if isinstance(c, discord.ForumChannel)]
+    voices = [c for c in guild.channels if isinstance(c, discord.VoiceChannel)]
+    cats = list(guild.categories)
+    ticket_ch = _pick_named(
+        texts, "📩", "поддержка-тикет", "поддержка тикет",
+        exclude=("архив", "мод", "mod", "лог", "log", "поддержка-нас"),
+    )
+    if ticket_ch is None:
+        ticket_ch = next((c for c in texts if TICKET_NAME_RE.search(c.name)), None)
+    return {
+        "tickets": bool(ticket_ch) or bool(_pick_named(cats, "🎫", "поддержка", "support", exclude=("архив", "archive", "archiv"))),
+        "search": bool(_pick_named(forums, "поиск отряда", "squad search", "поиск") or _pick_named(texts, "поиск отряда", "squad search")),
+        "clans": bool(_pick_named(forums, "набор в клан", "clan recruitment", "кланов") or _pick_named(texts, "набор в клан", "clan recruitment")),
+        "voices": bool(_pick_named(voices, "создать комнату", "create room") or next((v for v in voices if v.name.startswith("➕")), None)),
+        "logs": bool(_pick_named(texts, "admin logs", "admin-logs", "логи-сервера", "логи сервера", exclude=("мод", "mod"))),
+        "moderation": bool(_pick_named(texts, "мод панель", "mod panel", "мод-панель")),
+        "welcome": bool(_pick_named(texts, "welcome", "велком", "приветствие")),
+    }
+
+
 def _ticket_owner_id(channel: discord.TextChannel, me_id: int, staff_ids: set[int]) -> int:
     for target, ow in (channel.overwrites or {}).items():
         if getattr(ow, "view_channel", None) is not True:
@@ -166,7 +189,12 @@ async def _collect_forum_threads(forum: discord.ForumChannel) -> list[discord.Th
     return threads
 
 
-async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
+async def reattach_guild(
+    guild: discord.Guild,
+    me: discord.ClientUser,
+    scan_messages: bool = True,
+    recover_children: bool = True,
+) -> dict:
     g = await db.get_guild(guild.id)
     found: dict[str, str] = {}
     updates: dict = {}
@@ -175,10 +203,30 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
     forums = [c for c in guild.channels if isinstance(c, discord.ForumChannel)]
     voices = [c for c in guild.channels if isinstance(c, discord.VoiceChannel)]
     cats = list(guild.categories)
+    existing_tickets = [c for c in text_chs if TICKET_NAME_RE.search(c.name)]
 
     # --- имя / тип ---
+    if _need_ch(guild, g, "ticket_panel_channel"):
+        ch = _pick_named(
+            text_chs, "📩", "поддержка-тикет", "поддержка тикет",
+            exclude=("архив", "мод", "mod", "лог", "log", "поддержка-нас"),
+        )
+        if isinstance(ch, discord.TextChannel):
+            updates["ticket_panel_channel"] = ch.id
+            found["ticket_panel_channel"] = ch.name
+
     if _need_ch(guild, g, "ticket_category"):
-        ch = _pick_named(cats, "🎫", "поддержка", "support", exclude=("архив", "archive", "archiv"))
+        ch = None
+        panel = _alive_ch(guild, updates.get("ticket_panel_channel") or g.get("ticket_panel_channel"))
+        if isinstance(panel, discord.TextChannel) and isinstance(panel.category, discord.CategoryChannel):
+            ch = panel.category
+        if ch is None:
+            for tch in existing_tickets:
+                if isinstance(tch.category, discord.CategoryChannel) and not _has(tch.category.name, "архив", "archive", "archiv"):
+                    ch = tch.category
+                    break
+        if ch is None:
+            ch = _pick_named(cats, "🎫", "поддержка", "support", exclude=("архив", "archive", "archiv"))
         if isinstance(ch, discord.CategoryChannel):
             updates["ticket_category"] = ch.id
             found["ticket_category"] = ch.name
@@ -190,12 +238,6 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
         if isinstance(ch, discord.CategoryChannel):
             updates["ticket_archive_category"] = ch.id
             found["ticket_archive_category"] = ch.name
-
-    if _need_ch(guild, g, "ticket_panel_channel"):
-        ch = _pick_named(text_chs, "📩", "поддержка", "support", exclude=("архив", "мод", "mod", "лог", "log"))
-        if isinstance(ch, discord.TextChannel):
-            updates["ticket_panel_channel"] = ch.id
-            found["ticket_panel_channel"] = ch.name
 
     if _need_ch(guild, g, "search_channel"):
         ch = _pick_named(forums, "поиск отряда", "squad search", "trupp suche", "поиск")
@@ -228,7 +270,7 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
             found["voice_lobby"] = ch.name
 
     if _need_ch(guild, g, "admin_log_channel"):
-        ch = _pick_named(text_chs, "admin logs", "admin-logs", exclude=("мод", "mod"))
+        ch = _pick_named(text_chs, "admin logs", "admin-logs", "логи-сервера", "логи сервера", exclude=("мод", "mod"))
         if isinstance(ch, discord.TextChannel):
             updates["admin_log_channel"] = ch.id
             found["admin_log_channel"] = ch.name
@@ -252,7 +294,7 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
             found["mod_log_channel"] = ch.name
 
     if _need_ch(guild, g, "welcome_channel"):
-        ch = _pick_named(text_chs, "welcome", "велком")
+        ch = _pick_named(text_chs, "welcome", "велком", "приветствие")
         if isinstance(ch, discord.TextChannel):
             updates["welcome_channel"] = ch.id
             found["welcome_channel"] = ch.name
@@ -260,6 +302,22 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
     # роли
     if _need_role(guild, g, "ticket_staff_role"):
         role = next((r for n in ROLE_SUPPORT for r in [discord.utils.get(guild.roles, name=n)] if r), None)
+        if role is None:
+            role = next((r for r in guild.roles if _has(r.name, "support", "саппорт") and r.name != guild.default_role.name), None)
+        if role is None:
+            sample = existing_tickets[:3]
+            panel = _alive_ch(guild, updates.get("ticket_panel_channel") or g.get("ticket_panel_channel"))
+            if isinstance(panel, discord.TextChannel):
+                sample.append(panel)
+            for tch in sample:
+                for target, ow in (tch.overwrites or {}).items():
+                    if isinstance(target, discord.Role) and target.is_default():
+                        continue
+                    if isinstance(target, discord.Role) and ow.view_channel is True and not target.permissions.administrator:
+                        role = target
+                        break
+                if role:
+                    break
         if role:
             updates["ticket_staff_role"] = role.id
             found["ticket_staff_role"] = role.name
@@ -281,11 +339,8 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
                 found[col] = role.name
 
     # --- панели по custom_id (если имя не совпало / канал переименовали) ---
-    scan_targets = []
-    for ch in list(guild.channels):
-        if isinstance(ch, (discord.TextChannel, discord.VoiceChannel)):
-            scan_targets.append(ch)
-
+    ticket_from_buttons: set[int] = set()
+    voice_from_buttons: set[int] = set()
     panel_hits = {
         "ticket_panel_channel": None,
         "search_channel": None,
@@ -294,52 +349,59 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
         "clan_panel_id": None,
         "welcome_channel": None,
     }
-    ticket_from_buttons: set[int] = set()
-    voice_from_buttons: set[int] = set()
 
-    for ch in scan_targets:
-        hits = await _scan_bot_messages(ch, me)
-        for msg, cids in hits:
-            for cid in cids:
-                if cid.startswith("ticket:create:") or cid == "faq:select":
-                    if panel_hits["ticket_panel_channel"] is None:
-                        panel_hits["ticket_panel_channel"] = ch.id
-                        found.setdefault("ticket_panel_channel", ch.name)
-                elif cid.startswith("ticket:") and cid.count(":") >= 2:
-                    try:
-                        ticket_from_buttons.add(int(cid.split(":")[-1]))
-                    except ValueError:
-                        pass
-                elif cid in ("party:create", "party:scam", "party:mkvoice", "party:joininfo"):
-                    panel_hits["search_channel"] = ch.id
-                    panel_hits["search_panel_id"] = msg.id
-                    found.setdefault("search_channel", ch.name)
-                elif cid in ("clan:create", "clan:scam", "clan:transfer", "clan:howpost"):
-                    panel_hits["clan_channel"] = ch.id
-                    panel_hits["clan_panel_id"] = msg.id
-                    found.setdefault("clan_channel", ch.name)
-                elif cid.startswith("welcome:faction:"):
-                    if panel_hits["welcome_channel"] is None:
-                        panel_hits["welcome_channel"] = ch.id
-                        found.setdefault("welcome_channel", ch.name)
-                elif cid.startswith("voice:") and cid.count(":") >= 2:
-                    try:
-                        voice_from_buttons.add(int(cid.split(":")[-1]))
-                    except ValueError:
-                        pass
+    if scan_messages:
+        scan_targets = [
+            ch for ch in guild.channels
+            if isinstance(ch, (discord.TextChannel, discord.VoiceChannel))
+        ]
+        for ch in scan_targets:
+            hits = await _scan_bot_messages(ch, me)
+            for msg, cids in hits:
+                for cid in cids:
+                    if cid.startswith("ticket:create:") or cid == "faq:select":
+                        if panel_hits["ticket_panel_channel"] is None:
+                            panel_hits["ticket_panel_channel"] = ch.id
+                            found.setdefault("ticket_panel_channel", ch.name)
+                    elif cid.startswith("ticket:") and cid.count(":") >= 2:
+                        try:
+                            ticket_from_buttons.add(int(cid.split(":")[-1]))
+                        except ValueError:
+                            pass
+                    elif cid in ("party:create", "party:scam", "party:mkvoice", "party:joininfo"):
+                        panel_hits["search_channel"] = ch.id
+                        panel_hits["search_panel_id"] = msg.id
+                        found.setdefault("search_channel", ch.name)
+                    elif cid in ("clan:create", "clan:scam", "clan:transfer", "clan:howpost"):
+                        panel_hits["clan_channel"] = ch.id
+                        panel_hits["clan_panel_id"] = msg.id
+                        found.setdefault("clan_channel", ch.name)
+                    elif cid.startswith("welcome:faction:"):
+                        if panel_hits["welcome_channel"] is None:
+                            panel_hits["welcome_channel"] = ch.id
+                            found.setdefault("welcome_channel", ch.name)
+                    elif cid.startswith("voice:") and cid.count(":") >= 2:
+                        try:
+                            voice_from_buttons.add(int(cid.split(":")[-1]))
+                        except ValueError:
+                            pass
 
-    if _need_ch(guild, g, "ticket_panel_channel") and panel_hits["ticket_panel_channel"]:
-        updates["ticket_panel_channel"] = panel_hits["ticket_panel_channel"]
-    if _need_ch(guild, g, "search_channel") and panel_hits["search_channel"]:
-        updates["search_channel"] = panel_hits["search_channel"]
-    if (g.get("search_panel_id") or 0) == 0 and panel_hits["search_panel_id"]:
-        updates["search_panel_id"] = panel_hits["search_panel_id"]
-    if _need_ch(guild, g, "clan_channel") and panel_hits["clan_channel"]:
-        updates["clan_channel"] = panel_hits["clan_channel"]
-    if (g.get("clan_panel_id") or 0) == 0 and panel_hits["clan_panel_id"]:
-        updates["clan_panel_id"] = panel_hits["clan_panel_id"]
-    if _need_ch(guild, g, "welcome_channel") and panel_hits["welcome_channel"]:
-        updates["welcome_channel"] = panel_hits["welcome_channel"]
+        if _need_ch(guild, g, "ticket_panel_channel") and panel_hits["ticket_panel_channel"]:
+            updates["ticket_panel_channel"] = panel_hits["ticket_panel_channel"]
+            hit = guild.get_channel(panel_hits["ticket_panel_channel"])
+            if _need_ch(guild, g, "ticket_category") and isinstance(hit, discord.TextChannel) and hit.category:
+                updates["ticket_category"] = hit.category.id
+                found["ticket_category"] = hit.category.name
+        if _need_ch(guild, g, "search_channel") and panel_hits["search_channel"]:
+            updates["search_channel"] = panel_hits["search_channel"]
+        if (g.get("search_panel_id") or 0) == 0 and panel_hits["search_panel_id"]:
+            updates["search_panel_id"] = panel_hits["search_panel_id"]
+        if _need_ch(guild, g, "clan_channel") and panel_hits["clan_channel"]:
+            updates["clan_channel"] = panel_hits["clan_channel"]
+        if (g.get("clan_panel_id") or 0) == 0 and panel_hits["clan_panel_id"]:
+            updates["clan_panel_id"] = panel_hits["clan_panel_id"]
+        if _need_ch(guild, g, "welcome_channel") and panel_hits["welcome_channel"]:
+            updates["welcome_channel"] = panel_hits["welcome_channel"]
 
     if updates:
         await db.set_guild(guild.id, **updates)
@@ -351,6 +413,29 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
     max_ticket_num = int(g.get("ticket_counter") or 0)
 
     ticket_cat = _alive_ch(guild, g.get("ticket_category"))
+    arch_id = int(g.get("ticket_archive_category") or 0)
+    panel_id = int(g.get("ticket_panel_channel") or 0)
+    if isinstance(ticket_cat, discord.CategoryChannel):
+        for ch in existing_tickets:
+            if ch.id == panel_id:
+                continue
+            if ch.category_id in (ticket_cat.id, arch_id):
+                continue
+            try:
+                await ch.edit(category=ticket_cat, reason="WARDOGS: вернуть тикет в категорию поддержки")
+                found[f"moved:{ch.id}"] = ch.name
+            except Exception:
+                pass
+
+    if not recover_children:
+        return {
+            "guild": guild.name,
+            "bindings": {k: v for k, v in found.items() if ":" not in k},
+            "tickets": tickets_n,
+            "threads": threads_n,
+            "voices": voices_n,
+        }
+
     staff_ids = {int(g.get("ticket_staff_role") or 0), int(g.get("ticket_senior_role") or 0)}
     me_id = me.id
 
@@ -468,7 +553,7 @@ async def reattach_guild(guild: discord.Guild, me: discord.ClientUser) -> dict:
 
     return {
         "guild": guild.name,
-        "bindings": {k: v for k, v in found.items() if not k.startswith(("ticket:", "voice:"))},
+        "bindings": {k: v for k, v in found.items() if ":" not in k},
         "tickets": tickets_n,
         "threads": threads_n,
         "voices": voices_n,

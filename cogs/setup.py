@@ -31,24 +31,31 @@ async def _cooldown_ok(interaction: discord.Interaction, key: str, secs: int) ->
     return True
 
 
-async def installed_map(guild: discord.Guild) -> dict:
-    """Что реально стоит на сервере (ID из БД резолвится в канал/роль)."""
-    g = await db.get_guild(guild.id)
+def _id(v) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    def has(*cols):
-        for c in cols:
-            if guild.get_channel(g.get(c) or 0) or guild.get_role(g.get(c) or 0):
-                return True
-        return False
+
+async def installed_map(guild: discord.Guild) -> dict:
+    """Что реально стоит: сначала БД, если пусто — ищем каналы по именам на сервере."""
+    from utils.reattach import peek_modules
+    g = await db.get_guild(guild.id)
+    peeked = peek_modules(guild)
+
+    def has(col: str, key: str):
+        obj = guild.get_channel(_id(g.get(col))) or guild.get_role(_id(g.get(col)))
+        return bool(obj) or bool(peeked.get(key))
 
     return {
-        "tickets": has("ticket_panel_channel"),
-        "search": has("search_channel"),
-        "clans": has("clan_channel"),
-        "voices": has("voice_lobby"),
-        "logs": has("admin_log_channel"),
-        "moderation": has("mod_panel_channel"),
-        "welcome": has("welcome_channel"),
+        "tickets": has("ticket_panel_channel", "tickets"),
+        "search": has("search_channel", "search"),
+        "clans": has("clan_channel", "clans"),
+        "voices": has("voice_lobby", "voices"),
+        "logs": has("admin_log_channel", "logs"),
+        "moderation": has("mod_panel_channel", "moderation"),
+        "welcome": has("welcome_channel", "welcome"),
     }
 
 
@@ -177,6 +184,11 @@ async def pick_lang_and_continue(interaction: discord.Interaction):
         await db.set_guild(interaction.guild.id, language=lang)
         from utils.i18n import set_lang_cache
         set_lang_cache(interaction.guild.id, lang)
+        try:
+            from utils.reattach import reattach_guild
+            await reattach_guild(interaction.guild, interaction.client.user, scan_messages=False, recover_children=False)
+        except Exception:
+            pass
         await interaction.response.edit_message(view=await build_setup_view(interaction.guild))
     except (discord.errors.InteractionResponded, discord.errors.HTTPException, discord.errors.NotFound):
         pass
@@ -212,6 +224,15 @@ async def install_one_and_refresh(interaction: discord.Interaction, key: str):
     except Exception:
         pass
     cog = interaction.client.get_cog("Setup")
+    try:
+        from utils.reattach import reattach_guild
+        await reattach_guild(interaction.guild, interaction.client.user, scan_messages=False, recover_children=False)
+    except Exception:
+        pass
+    installed = await installed_map(interaction.guild)
+    if installed.get(key):
+        await _refresh_or_follow(interaction, f"✅ Уже стоит на сервере — привязал, ничего не создавал.")
+        return
     fn = {"tickets": cog.install_tickets, "search": cog.install_search, "clans": cog.install_clans,
           "voices": cog.install_voices, "logs": cog.install_logs,
           "moderation": cog.install_moderation, "welcome": cog.install_welcome}[key]
@@ -246,11 +267,23 @@ async def install_all_and_refresh(interaction: discord.Interaction):
     except Exception:
         pass
     cog = interaction.client.get_cog("Setup")
+    try:
+        from utils.reattach import reattach_guild
+        await reattach_guild(interaction.guild, interaction.client.user, scan_messages=False, recover_children=False)
+    except Exception:
+        pass
+    installed = await installed_map(interaction.guild)
     out = []
-    for fn in [cog.install_tickets, cog.install_search, cog.install_clans, cog.install_voices,
-               cog.install_logs, cog.install_moderation, cog.install_welcome]:
+    for key, fn in [
+        ("tickets", cog.install_tickets), ("search", cog.install_search), ("clans", cog.install_clans),
+        ("voices", cog.install_voices), ("logs", cog.install_logs), ("moderation", cog.install_moderation),
+        ("welcome", cog.install_welcome),
+    ]:
         try:
-            out.append(await fn(interaction.guild))
+            if installed.get(key):
+                out.append(f"{key}: уже было — привязал")
+            else:
+                out.append(await fn(interaction.guild))
         except Exception as e:
             out.append(f"❌ {e}")
     await _refresh_or_follow(interaction, "✅ **Всё установлено:**\n• " + "\n• ".join(out))
