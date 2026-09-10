@@ -11,19 +11,20 @@ ASSETS = ROOT / "assets"
 
 # финальный размер; рисуем в 2x и уменьшаем — края круга без зубцов
 SCALE = 2
-W, H = 1200 * SCALE, 560 * SCALE
+W, H = 1280 * SCALE, 600 * SCALE
 AVATAR = 248 * SCALE
-GOLD = (232, 180, 48, 255)
-HELLO = (168, 168, 168, 255)
+GOLD = (236, 186, 42, 255)
+HELLO = (176, 176, 176, 255)
 
 
 def _font(path_name: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    p = ASSETS / path_name
-    if p.exists():
-        try:
-            return ImageFont.truetype(str(p), size)
-        except Exception:
-            pass
+    for name in (path_name, "welcome_black.ttf", "welcome_extrabold.ttf", "welcome_bold.ttf"):
+        p = ASSETS / name
+        if p.exists():
+            try:
+                return ImageFont.truetype(str(p), size)
+            except Exception:
+                continue
     return ImageFont.load_default()
 
 
@@ -72,14 +73,14 @@ def _circle_avatar(src: Image.Image, size: int) -> Image.Image:
 
 
 def _fit_name(text: str, max_width: int) -> ImageFont.ImageFont:
-    size = 84 * SCALE
-    while size >= 40 * SCALE:
-        font = _font("welcome_bold.ttf", size)
+    size = 90 * SCALE
+    while size >= 48 * SCALE:
+        font = _font("welcome_black.ttf", size)
         box = font.getbbox(text)
         if box[2] - box[0] <= max_width:
             return font
         size -= 2 * SCALE
-    return _font("welcome_bold.ttf", 40 * SCALE)
+    return _font("welcome_black.ttf", 48 * SCALE)
 
 
 def render_welcome_card(avatar_bytes: bytes, username: str, hello: str) -> io.BytesIO:
@@ -95,15 +96,19 @@ def render_welcome_card(avatar_bytes: bytes, username: str, hello: str) -> io.By
 
     draw = ImageDraw.Draw(base)
     name = (username or "user")[:32]
-    name_font = _fit_name(name, W - 160 * SCALE)
-    hello_font = _font("welcome_regular.ttf", 38 * SCALE)
+    name_font = _fit_name(name, W - 120 * SCALE)
+    hello_font = _font("welcome_extrabold.ttf", 36 * SCALE)
 
-    name_y = ay + avatar.height + 28 * SCALE
-    draw.text((W // 2, name_y), name, font=name_font, fill=GOLD, anchor="mt")
+    name_y = ay + avatar.height + 32 * SCALE
+    stroke = max(2, int(getattr(name_font, "size", 80) * 0.035))
+    draw.text(
+        (W // 2, name_y), name, font=name_font, fill=GOLD, anchor="mt",
+        stroke_width=stroke, stroke_fill=GOLD,
+    )
 
     nb = name_font.getbbox(name)
     name_h = nb[3] - nb[1]
-    hello_y = name_y + name_h + 18 * SCALE
+    hello_y = name_y + name_h + stroke + 28 * SCALE
     draw.text((W // 2, hello_y), hello, font=hello_font, fill=HELLO, anchor="mt")
 
     final = base.convert("RGB").resize((W // SCALE, H // SCALE), Image.Resampling.LANCZOS)
