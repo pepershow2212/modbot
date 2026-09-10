@@ -272,7 +272,8 @@ class Voices(commands.Cog):
         import logging
         vlog = logging.getLogger("wardogs.voice")
         guild = member.guild
-        g = await db.get_guild(guild.id)
+        from utils.live import conf
+        g = await conf(guild)
         lobby_id = g.get("voice_lobby")
         vlog.info(f"voice_update {member} before={before.channel.id if before.channel else None} after={after.channel.id if after.channel else None} lobby={lobby_id}")
         # зашёл в лобби → создать приват (панель ТОЛЬКО во встроенный чат войса)

@@ -132,7 +132,8 @@ async def create_ticket(interaction: discord.Interaction, type_key: str, body: s
     if not await db.is_on(guild.id, "tickets"):
         await interaction.response.send_message(t_sync(lang, "tk_mod_off"), ephemeral=True)
         return
-    g = await db.get_guild(guild.id)
+    from utils.live import conf, get_ch
+    g = await conf(guild)
     try:
         cat_id = int(g.get("ticket_category") or 0)
     except (TypeError, ValueError):

@@ -39,11 +39,9 @@ async def send_log(guild: discord.Guild, text: str):
     try:
         if not await db.is_on(guild.id, "logs"):
             return
-        g = await db.get_guild(guild.id)
-        ch_id = g.get("admin_log_channel") or 0
-        if not ch_id:
-            return
-        ch = guild.get_channel(ch_id)
+        from utils.live import conf, get_ch
+        g = await conf(guild)
+        ch = get_ch(guild, g, "admin_log_channel")
         if not isinstance(ch, discord.TextChannel):
             return
 
