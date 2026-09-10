@@ -7,6 +7,7 @@ try:
 except Exception:
     pass
 import discord
+from discord import app_commands
 from discord.ext import commands
 import config
 from database import db
@@ -89,16 +90,20 @@ async def on_ready():
             log.warning(f"reattach failed: {e}")
             print(f"⚠️ Не смог сам найти старые панели: {e}", flush=True)
     try:
-        if config.TEST_GUILD_ID:
-            guild = discord.Object(id=int(config.TEST_GUILD_ID))
+        synced = []
+        for guild in bot.guilds:
             bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
-            print("🔄 Синк на тестовый сервер")
-        else:
+            synced.append(str(guild.id))
+        if not synced:
             await bot.tree.sync()
-            print("🔄 Глобальный синк команд")
+            print("🔄 Глобальный синк команд", flush=True)
+        else:
+            print(f"🔄 Синк slash на серверы: {', '.join(synced)}", flush=True)
+            log.info(f"slash synced guilds={synced}")
     except Exception as e:
         print("⚠️ Sync error:", e)
+        log.warning(f"slash sync failed: {e}")
 
 
 async def load_cogs():
@@ -128,6 +133,17 @@ async def on_command_error(ctx, error):
 
 @bot.tree.error
 async def on_app_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.CommandNotFound):
+        log.warning(f"stale slash ignored: {error}")
+        try:
+            msg = "Это не команда WARDOGS TOOLS. /ask /summary /explain — у бота **WARDOGS AI**."
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            pass
+        return
     log_error(f"slash:{interaction.command.name if interaction.command else '?'} by {interaction.user} in {interaction.guild}", error)
     try:
         msg = f"❌ Ошибка: `{str(error)[:300]}`"
