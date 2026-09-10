@@ -40,10 +40,20 @@ class Welcome(commands.Cog):
             ch = get_ch(member.guild, g, "welcome_channel")
             if not isinstance(ch, discord.TextChannel):
                 return
-            from utils.i18n import get_lang as _tgl
-            await ch.send(view=build_welcome(member, await _tgl(member.guild.id)))
-            from utils.alog import send_log
-            await send_log(member.guild, f"👋 Зашёл {member.mention} (`{member}`)")
+            from utils.i18n import get_lang as _tgl, t_sync
+            lang = await _tgl(member.guild.id)
+            try:
+                import asyncio
+                from utils.welcome_card import render_welcome_card
+                avatar_bytes = await member.display_avatar.with_size(256).read()
+                loop = asyncio.get_running_loop()
+                buf = await loop.run_in_executor(
+                    None,
+                    lambda: render_welcome_card(avatar_bytes, member.name, t_sync(lang, "w_hello")),
+                )
+                await ch.send(file=discord.File(buf, filename="welcome.png"))
+            except Exception:
+                await ch.send(view=build_welcome(member, lang))
         except Exception:
             pass
 
