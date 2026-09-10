@@ -113,6 +113,11 @@ class TicketModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         from utils.i18n import get_lang as _tgl, t_sync
         lang = await _tgl(interaction.guild.id)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
         body = f"**{t_sync(lang, 'tk_from')}:** {interaction.user.mention} (`{self.nick.value}`)\n\n{self.desc.value}"
         await create_ticket(interaction, self.type_key, body)
 
@@ -129,10 +134,17 @@ async def create_ticket(interaction: discord.Interaction, type_key: str, body: s
     guild = interaction.guild
     from utils.i18n import get_lang as _tgl, t_sync
     lang = await _tgl(guild.id)
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+    except Exception:
+        pass
     if not await db.is_on(guild.id, "tickets"):
-        await interaction.response.send_message(t_sync(lang, "tk_mod_off"), ephemeral=True)
+        await interaction.followup.send(t_sync(lang, "tk_mod_off"), ephemeral=True)
         return
-    from utils.live import conf, get_ch
+    from utils.live import (
+        conf, find_ticket_senior, find_ticket_staff, is_ticket_staff_role, ticket_private_overwrites,
+    )
     g = await conf(guild)
     try:
         cat_id = int(g.get("ticket_category") or 0)
@@ -147,45 +159,68 @@ async def create_ticket(interaction: discord.Interaction, type_key: str, body: s
         if isinstance(panel, discord.TextChannel) and isinstance(panel.category, discord.CategoryChannel):
             category = panel.category
             await db.set_guild(guild.id, ticket_category=category.id)
+    staff = None
     try:
-        staff_id = int(g.get("ticket_staff_role") or 0)
+        staff = guild.get_role(int(g.get("ticket_staff_role") or 0))
     except (TypeError, ValueError):
-        staff_id = 0
-    staff = guild.get_role(staff_id) if staff_id else None
-    if staff is None:
-        staff = discord.utils.get(guild.roles, name="Support")
+        staff = None
+    if not is_ticket_staff_role(staff):
+        staff = find_ticket_staff(guild)
+        if staff:
+            await db.set_guild(guild.id, ticket_staff_role=staff.id)
+    senior = None
+    try:
+        senior = guild.get_role(int(g.get("ticket_senior_role") or 0))
+    except (TypeError, ValueError):
+        senior = None
+    if senior is None:
+        senior = find_ticket_senior(guild)
 
     num = await db.next_ticket_num(guild.id)
     meta = ticket_meta(type_key, lang)
     name = f"🎫・{type_key}-{num:04d}"
+    overwrites = ticket_private_overwrites(guild, interaction.user, staff, category, senior)
 
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
-        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
-    }
-    if staff:
-        overwrites[staff] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-    channel = await guild.create_text_channel(name, category=category if isinstance(category, discord.CategoryChannel) else None, overwrites=overwrites, reason=f"Ticket {type_key} by {interaction.user}")
+    try:
+        channel = await guild.create_text_channel(
+            name,
+            category=category if isinstance(category, discord.CategoryChannel) else None,
+            overwrites=overwrites,
+            reason=f"Ticket {type_key} by {interaction.user}",
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ Не смог создать тикет: {e}", ephemeral=True)
+        return
 
     import aiosqlite
     async with db.conn() as dbc:
-        await dbc.execute("INSERT INTO tickets(guild_id, channel_id, owner_id, type_key) VALUES(?,?,?,?)",
-                          (guild.id, channel.id, interaction.user.id, type_key))
+        await dbc.execute(
+            "INSERT INTO tickets(guild_id, channel_id, owner_id, type_key) VALUES(?,?,?,?)",
+            (guild.id, channel.id, interaction.user.id, type_key),
+        )
         await dbc.commit()
 
     v = build_in_ticket_panel(channel.id, meta, body, interaction.user, num, None, lang)
-
-    mention = f"{staff.mention} " if staff else ""
-    if mention.strip():
-        await channel.send(f"{mention}{interaction.user.mention}")
-    else:
-        await channel.send(f"{interaction.user.mention} {t_sync(lang, 'tk_created_here')}")
-    await channel.send(view=v)
+    ping = staff.mention if is_ticket_staff_role(staff) else ""
+    am = discord.AllowedMentions(
+        everyone=False,
+        users=[interaction.user],
+        roles=[staff] if is_ticket_staff_role(staff) else False,
+    )
+    try:
+        if ping:
+            await channel.send(f"{ping} {interaction.user.mention}", allowed_mentions=am)
+        else:
+            await channel.send(f"{interaction.user.mention} {t_sync(lang, 'tk_created_here')}", allowed_mentions=am)
+        await channel.send(view=v)
+    except Exception:
+        pass
     from utils.alog import send_log
-    await send_log(guild, f"🎫 Тикет {channel.mention} `#{num:04d}` • {meta['label']} • от {interaction.user.mention}")
-    await interaction.followup.send(t_sync(lang, "tk_created").format(ch=channel.mention), ephemeral=True) if interaction.response.is_done() else await interaction.response.send_message(t_sync(lang, "tk_created").format(ch=channel.mention), ephemeral=True)
+    await send_log(guild, f"🎫 Тикет `#{channel.name}` `#{num:04d}` • {meta['label']} • от {interaction.user.mention}")
+    try:
+        await interaction.followup.send(t_sync(lang, "tk_created").format(ch=channel.mention), ephemeral=True)
+    except Exception:
+        pass
 
 
 def build_in_ticket_panel(channel_id: int, meta: dict, body: str, owner, num: int, claimed, lang: str = "ru") -> discord.ui.LayoutView:
@@ -309,13 +344,19 @@ class TicketUserModal(discord.ui.Modal):
 
 
 async def _is_staff(guild: discord.Guild, member: discord.Member) -> bool:
-    """Support / Senior / админ."""
+    """Support / Senior / админ. Роль «Пользователь» сюда не считается."""
     if member.guild_permissions.administrator:
         return True
+    from utils.live import is_ticket_staff_role
     try:
         g = await db.get_guild(guild.id)
-        ids = {g.get("ticket_staff_role") or 0, g.get("ticket_senior_role") or 0}
-        return any(r.id in ids for r in member.roles)
+        for key in ("ticket_staff_role", "ticket_senior_role"):
+            role = guild.get_role(int(g.get(key) or 0) or 0)
+            if is_ticket_staff_role(role) and role in member.roles:
+                return True
+            if key == "ticket_senior_role" and isinstance(role, discord.Role) and role in member.roles:
+                return True
+        return False
     except Exception:
         return False
 
