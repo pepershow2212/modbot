@@ -120,22 +120,29 @@ async def on_ready():
         pass
     log.info(f"{bot.user} online | {len(bot.guilds)} guilds")
     print(f"✅ {bot.user} онлайн | {len(bot.guilds)} серверов", flush=True)
+    # Slash first. Reattach walks the whole guild and can block for minutes.
+    if not getattr(bot, "_slash_synced", False):
+        try:
+            await sync_slash_commands()
+            bot._slash_synced = True
+        except Exception as e:
+            print("⚠️ Sync error:", e)
+            log.warning(f"slash sync failed: {e}")
     if not getattr(bot, "_reattached", False):
         bot._reattached = True
-        try:
-            from utils.reattach import reattach_all
-            stats = await reattach_all(bot)
-            log.info(f"reattach: {stats}")
-            print(f"🔗 Привязки восстановлены: {stats}", flush=True)
-        except Exception as e:
-            bot._reattached = False
-            log.warning(f"reattach failed: {e}")
-            print(f"⚠️ Не смог сам найти старые панели: {e}", flush=True)
+        bot.loop.create_task(_reattach_later())
+
+
+async def _reattach_later():
     try:
-        await sync_slash_commands()
+        from utils.reattach import reattach_all
+        stats = await reattach_all(bot)
+        log.info(f"reattach: {stats}")
+        print(f"🔗 Привязки восстановлены: {stats}", flush=True)
     except Exception as e:
-        print("⚠️ Sync error:", e)
-        log.warning(f"slash sync failed: {e}")
+        bot._reattached = False
+        log.warning(f"reattach failed: {e}")
+        print(f"⚠️ Не смог сам найти старые панели: {e}", flush=True)
 
 
 async def load_cogs():
