@@ -134,6 +134,22 @@ class Channels(commands.Cog):
         body = format_stats(stats)
         await interaction.followup.send(t_sync(lang, "reattach_ok").format(lines=body), ephemeral=True)
 
+    @app_commands.command(name="repairview", description="Вернуть видимость каналов / Restore hidden channels (админ/admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def repairview(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        from utils.live import restore_hidden_channels
+        g = await db.get_guild(interaction.guild.id)
+        restored = await restore_hidden_channels(interaction.guild, g)
+        if restored:
+            body = "\n".join(f"• `#{n}`" for n in restored)
+            await interaction.followup.send(f"🔓 Вернул видимость ({len(restored)}):\n{body}", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "🔓 Каналы с нашей блокировкой не нашёл. Если категория всё ещё скрыта — в настройках категории включи «Просмотр канала» для @everyone / Пользователь.",
+                ephemeral=True,
+            )
+
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild):
         try:

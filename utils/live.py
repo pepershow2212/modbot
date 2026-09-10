@@ -5,7 +5,7 @@ import re
 
 import discord
 from database import db
-from utils.reattach import _alive_ch, _has, _pick_named
+from utils.reattach import TICKET_NAME_RE, _alive_ch, _has, _pick_named
 
 SEARCH_NAMES = ("поиск отряда", "поиск-отряда", "squad search", "squad-search", "trupp suche")
 CLAN_NAMES = ("набор в клан", "набор-в-клан", "clan recruitment", "clan-recruitment", "clan rekrutierung")
@@ -99,7 +99,8 @@ def find_ticket_senior(guild: discord.Guild):
 
 
 def ticket_private_overwrites(guild: discord.Guild, owner, staff, category, senior=None, keep_members=()):
-    """Только автор + Support (+ старший). Категорийные роли вроде «Пользователь» — запрет."""
+    """Тикет видит автор и Support. @everyone и роль «Пользователь» закрыты.
+    Чужие каналы и роли руководства не трогаем."""
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
         guild.me: discord.PermissionOverwrite(
@@ -115,12 +116,6 @@ def ticket_private_overwrites(guild: discord.Guild, owner, staff, category, seni
         overwrites[staff] = discord.PermissionOverwrite(
             view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
         )
-    keep_ids = {guild.me.id}
-    if owner is not None:
-        keep_ids.add(owner.id)
-    keep_ids.update(getattr(m, "id", 0) for m in keep_members)
-    if is_ticket_staff_role(staff):
-        keep_ids.add(staff.id)
     senior_ok = (
         isinstance(senior, discord.Role)
         and senior != staff
@@ -130,22 +125,27 @@ def ticket_private_overwrites(guild: discord.Guild, owner, staff, category, seni
         overwrites[senior] = discord.PermissionOverwrite(
             view_channel=True, send_messages=True, attach_files=True, read_message_history=True,
         )
-        keep_ids.add(senior.id)
-    if isinstance(category, discord.CategoryChannel):
-        for target, _ow in (category.overwrites or {}).items():
-            tid = getattr(target, "id", 0)
-            if tid in keep_ids or target in overwrites:
-                continue
-            overwrites[target] = discord.PermissionOverwrite(view_channel=False)
     for role in guild.roles:
-        if role.id in keep_ids or role in overwrites or role.is_default():
+        if role.is_default() or role in overwrites:
             continue
         if _has(role.name, *NOT_STAFF_ROLES):
             overwrites[role] = discord.PermissionOverwrite(view_channel=False)
     return overwrites
 
 
+def is_ticket_channel_name(name: str) -> bool:
+    return bool(TICKET_NAME_RE.search(name or ""))
+
+
+def _looks_like_lockdown(channel: discord.TextChannel) -> bool:
+    everyone = channel.overwrites_for(channel.guild.default_role)
+    me = channel.overwrites_for(channel.guild.me)
+    return everyone.view_channel is False and me.manage_channels is True
+
+
 async def harden_ticket_channel(channel: discord.TextChannel, owner, staff, senior=None):
+    if not is_ticket_channel_name(channel.name):
+        return
     keep = []
     for target, ow in (channel.overwrites or {}).items():
         if isinstance(target, (discord.Member, discord.User)) and ow.view_channel is True:
@@ -158,6 +158,44 @@ async def harden_ticket_channel(channel: discord.TextChannel, owner, staff, seni
         )
     except Exception:
         pass
+
+
+PROTECTED_NAMES = (
+    "мод панель", "мод-панель", "mod panel", "мод логи", "мод-логи", "mod logs",
+    "admin logs", "admin-logs", "логи-сервера", "логи сервера",
+)
+
+
+async def restore_hidden_channels(guild: discord.Guild, g: dict | None = None) -> list[str]:
+    """Вернуть видимость каналам, которые закрыли как тикеты по ошибке."""
+    g = g or {}
+    skip_ids = {
+        _iid(g.get("mod_panel_channel")),
+        _iid(g.get("mod_log_channel")),
+        _iid(g.get("admin_log_channel")),
+    }
+    restored = []
+    for ch in guild.channels:
+        if not isinstance(ch, discord.TextChannel):
+            continue
+        if ch.id in skip_ids:
+            continue
+        if is_ticket_channel_name(ch.name):
+            continue
+        if _has(ch.name, *PROTECTED_NAMES):
+            continue
+        if ch.permissions_synced:
+            continue
+        if not _looks_like_lockdown(ch):
+            continue
+        if ch.category is None:
+            continue
+        try:
+            await ch.edit(sync_permissions=True, reason="WARDOGS: вернуть видимость канала")
+            restored.append(ch.name)
+        except Exception:
+            pass
+    return restored
 
 
 def _find_search(guild: discord.Guild):

@@ -230,7 +230,7 @@ async def reattach_guild(
                     ch = tch.category
                     break
         if ch is None:
-            ch = _pick_named(cats, "🎫", "поддержка", "support", exclude=("архив", "archive", "archiv"))
+            ch = _pick_named(cats, "🎫", "тикет", "ticket", exclude=("архив", "archive", "archiv", "мод", "mod"))
         if isinstance(ch, discord.CategoryChannel):
             updates["ticket_category"] = ch.id
             found["ticket_category"] = ch.name
@@ -430,12 +430,15 @@ async def reattach_guild(
                 pass
 
     if not recover_children:
+        from utils.live import restore_hidden_channels
+        restored = await restore_hidden_channels(guild, g)
         return {
             "guild": guild.name,
             "bindings": {k: v for k, v in found.items() if ":" not in k},
             "tickets": tickets_n,
             "threads": threads_n,
             "voices": voices_n,
+            "restored": restored,
         }
 
     staff_ids = {int(g.get("ticket_staff_role") or 0), int(g.get("ticket_senior_role") or 0)}
@@ -562,15 +565,23 @@ async def reattach_guild(
 
         await dbc.commit()
 
-    from utils.live import find_ticket_senior, find_ticket_staff, harden_ticket_channel, is_ticket_staff_role
+    from utils.live import (
+        find_ticket_senior, find_ticket_staff, harden_ticket_channel,
+        is_ticket_staff_role, restore_hidden_channels,
+    )
+    restored = await restore_hidden_channels(guild, g)
+    if restored:
+        found["restored_visibility"] = ", ".join(restored[:15])
+        log.info("restored visibility %s: %s", guild.id, restored)
+
     staff_role = _alive_role(guild, g.get("ticket_staff_role"))
     if not is_ticket_staff_role(staff_role):
         staff_role = find_ticket_staff(guild)
     senior_role = _alive_role(guild, g.get("ticket_senior_role")) or find_ticket_senior(guild)
     for ch in ticket_channels:
-        if ch.id == (g.get("ticket_panel_channel") or 0):
+        if not TICKET_NAME_RE.search(ch.name or ""):
             continue
-        if ch.id == (g.get("admin_log_channel") or 0):
+        if ch.id == (g.get("ticket_panel_channel") or 0):
             continue
         owner_id = _ticket_owner_id(ch, me_id, staff_ids)
         owner = guild.get_member(owner_id) if owner_id else None
@@ -585,6 +596,7 @@ async def reattach_guild(
         "tickets": tickets_n,
         "threads": threads_n,
         "voices": voices_n,
+        "restored": restored,
     }
 
 
@@ -610,4 +622,7 @@ def format_stats(stats: dict) -> str:
     lines.append(f"• тикеты: +{stats.get('tickets', 0)}")
     lines.append(f"• треды: +{stats.get('threads', 0)}")
     lines.append(f"• войсы: +{stats.get('voices', 0)}")
+    restored = stats.get("restored") or []
+    if restored:
+        lines.append("• видимость: " + ", ".join(f"`{n}`" for n in restored[:20]))
     return "\n".join(lines) if lines else "—"
