@@ -114,6 +114,25 @@ class Channels(commands.Cog):
         await send_log(interaction.guild, f"📌 {label} → {channel.mention} поставил {interaction.user.mention}")
         await interaction.followup.send(t_sync(lang, "ch_done").format(label=label, ch=channel.mention, extra=extra), ephemeral=True)
 
+    @app_commands.command(name="reattach", description="Найти свои каналы и панели / Rebind existing setup (админ/admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def reattach(self, interaction: discord.Interaction):
+        from utils.i18n import get_lang as _tgl, t_sync
+        from utils.reattach import reattach_guild, format_stats
+        lang = await _tgl(interaction.guild.id)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        stats = await reattach_guild(interaction.guild, interaction.client.user)
+        body = format_stats(stats)
+        await interaction.followup.send(t_sync(lang, "reattach_ok").format(lines=body), ephemeral=True)
+
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        try:
+            from utils.reattach import reattach_guild
+            await reattach_guild(guild, self.bot.user)
+        except Exception:
+            pass
+
 
 async def setup(bot):
     await bot.add_cog(Channels(bot))

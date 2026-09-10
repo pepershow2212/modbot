@@ -77,6 +77,17 @@ async def on_ready():
         pass
     log.info(f"{bot.user} online | {len(bot.guilds)} guilds")
     print(f"✅ {bot.user} онлайн | {len(bot.guilds)} серверов", flush=True)
+    if not getattr(bot, "_reattached", False):
+        bot._reattached = True
+        try:
+            from utils.reattach import reattach_all
+            stats = await reattach_all(bot)
+            log.info(f"reattach: {stats}")
+            print(f"🔗 Привязки восстановлены: {stats}", flush=True)
+        except Exception as e:
+            bot._reattached = False
+            log.warning(f"reattach failed: {e}")
+            print(f"⚠️ Не смог сам найти старые панели: {e}", flush=True)
     try:
         if config.TEST_GUILD_ID:
             guild = discord.Object(id=int(config.TEST_GUILD_ID))
