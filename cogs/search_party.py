@@ -127,8 +127,9 @@ class PartyModal(discord.ui.Modal):
             f"🕒 {t_sync(lang, 'pm_time_l')}: {self.time_mic.value}\n"
             f"💬 {t_sync(lang, 'pm_about_l')}: {self.about.value}"
         )
-        g = await db.get_guild(interaction.guild.id)
-        ch = interaction.guild.get_channel(g.get("search_channel") or 0) or interaction.channel
+        from utils.live import conf, get_ch
+        g = await conf(interaction.guild)
+        ch = get_ch(interaction.guild, g, "search_channel") or interaction.channel
         async with db.conn() as dbc:
             cur = await dbc.execute("INSERT INTO parties(guild_id, owner_id, text) VALUES(?,?,?)",
                                     (interaction.guild.id, interaction.user.id, text))
@@ -193,9 +194,17 @@ async def handle_party_button(interaction: discord.Interaction, custom_id: str, 
             ))
             await interaction.response.send_message(view=v, ephemeral=True)
         elif custom_id == "party:mkvoice":
-            # быстрый пати-войс
-            cat = interaction.guild.categories[0] if interaction.guild.categories else None
-            vc = await interaction.guild.create_voice_channel(f"{t_sync(lang, 'party_pref')}{interaction.user.display_name}", category=cat, reason="party voice")
+            # быстрый пати-войс — в ту же категорию, что и приватки
+            from utils.live import conf, find_voice_category
+            g = await conf(interaction.guild)
+            cat = interaction.guild.get_channel(int(g.get("voice_category") or 0) or 0)
+            if not isinstance(cat, discord.CategoryChannel):
+                cat = find_voice_category(interaction.guild)
+            vc = await interaction.guild.create_voice_channel(
+                f"{t_sync(lang, 'party_pref')}{interaction.user.display_name}",
+                category=cat if isinstance(cat, discord.CategoryChannel) else None,
+                reason="party voice",
+            )
             await interaction.response.send_message(t_sync(lang, "ps_mkvoice").format(ch=vc.mention), ephemeral=True)
         elif custom_id == "party:joininfo":
             await interaction.response.send_message(t_sync(lang, "ps_joininfo"), ephemeral=True)
@@ -285,8 +294,9 @@ class SearchParty(commands.Cog):
         from utils.i18n import get_lang as _tgl, t_sync
         lang = await _tgl(interaction.guild.id)
         await interaction.response.defer(ephemeral=True)
-        g = await db.get_guild(interaction.guild.id)
-        ch = interaction.guild.get_channel(g.get("search_channel") or 0)
+        from utils.live import conf, get_ch
+        g = await conf(interaction.guild)
+        ch = get_ch(interaction.guild, g, "search_channel")
         if isinstance(ch, discord.ForumChannel):
             await ensure_lfg_example(ch)
             await interaction.followup.send(t_sync(lang, "ps_panel_bottom"), ephemeral=True)
@@ -302,7 +312,8 @@ class SearchParty(commands.Cog):
             return
         if not await db.is_on(message.guild.id, "search"):
             return
-        g = await db.get_guild(message.guild.id)
+        from utils.live import conf
+        g = await conf(message.guild)
         if message.channel.id != (g.get("search_channel") or 0):
             return
         if not isinstance(message.channel, discord.TextChannel):
@@ -321,8 +332,9 @@ class SearchParty(commands.Cog):
         try:
             if not thread.guild or not await db.is_on(thread.guild.id, "search"):
                 return
-            g = await db.get_guild(thread.guild.id)
-            if thread.parent_id != (g.get("search_channel") or 0):
+            from utils.live import conf, is_search_forum
+            g = await conf(thread.guild)
+            if not is_search_forum(thread.guild, thread.parent_id, g):
                 return
             if thread.name.startswith("📌"):
                 return
@@ -365,9 +377,10 @@ class SearchParty(commands.Cog):
             guild = self.bot.get_guild(payload.guild_id)
             if guild is None or not await db.is_on(guild.id, "search"):
                 return
-            g = await db.get_guild(guild.id)
+            from utils.live import conf, is_search_forum
+            g = await conf(guild)
             thread = guild.get_thread(payload.channel_id)
-            if thread is None or thread.parent_id != (g.get("search_channel") or 0):
+            if thread is None or not is_search_forum(guild, thread.parent_id, g):
                 return
             if thread.name.startswith("📌"):
                 return

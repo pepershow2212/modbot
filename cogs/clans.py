@@ -91,9 +91,10 @@ class ClanModal(discord.ui.Modal):
             self.add_item(_i)
 
     async def on_submit(self, interaction: discord.Interaction):
+        from utils.live import conf, get_ch
         from utils.sticky import restick
-        g = await db.get_guild(interaction.guild.id)
-        ch = interaction.guild.get_channel(g.get("clan_channel") or 0) or interaction.channel
+        g = await conf(interaction.guild)
+        ch = get_ch(interaction.guild, g, "clan_channel") or interaction.channel
         full = (
             f"**Тег:** {self.clan_name.value}\n"
             f"**Фракция:** {self.faction.value}\n"
@@ -115,14 +116,37 @@ class ClanModal(discord.ui.Modal):
         b = discord.ui.Button(label="Вступить", emoji="✉️", custom_id=f"clan:join:{cid}", style=discord.ButtonStyle.primary)
         row.add_item(b)
         v.add_item(row)
-        msg = await ch.send(view=v)
-        async with db.conn() as dbc:
-            await dbc.execute("UPDATE clan_apps SET message_id=? WHERE id=?", (msg.id, cid))
-            await dbc.commit()
-        try:
-            await restick(ch, interaction.guild.id, "clan_panel_id", build_clan_panel, force=True)
-        except Exception:
-            pass
+        if isinstance(ch, discord.ForumChannel):
+            thread, starter = await ch.create_thread(
+                name=(self.clan_name.value or f"clan-{cid}")[:95],
+                content=f"{interaction.user.mention}\n{full}"[:1900],
+                view=v,
+                reason="WARDOGS clan post",
+            )
+            async with db.conn() as dbc:
+                await dbc.execute("UPDATE clan_apps SET message_id=? WHERE id=?", (starter.id, cid))
+                await dbc.execute(
+                    "INSERT OR REPLACE INTO clan_threads(guild_id, thread_id, owner_id, clan_name, last_bump) VALUES(?,?,?,?,?)",
+                    (interaction.guild.id, thread.id, interaction.user.id, (self.clan_name.value or "")[:60], int(time.time())),
+                )
+                await dbc.commit()
+            try:
+                await starter.add_reaction("⬆️")
+            except Exception:
+                pass
+            try:
+                await thread.edit(locked=True, archived=False, reason="WARDOGS: только анкета + бамп")
+            except Exception:
+                pass
+        else:
+            msg = await ch.send(view=v)
+            async with db.conn() as dbc:
+                await dbc.execute("UPDATE clan_apps SET message_id=? WHERE id=?", (msg.id, cid))
+                await dbc.commit()
+            try:
+                await restick(ch, interaction.guild.id, "clan_panel_id", build_clan_panel, force=True)
+            except Exception:
+                pass
         from utils.i18n import get_lang as _tgl, t_sync
         await interaction.response.send_message(t_sync(await _tgl(interaction.guild.id), "cl_pub").format(ch=ch.mention), ephemeral=True)
 
@@ -243,8 +267,9 @@ class Clans(commands.Cog):
         from utils.i18n import get_lang as _tgl, t_sync
         lang = await _tgl(interaction.guild.id)
         await interaction.response.defer(ephemeral=True)
-        g = await db.get_guild(interaction.guild.id)
-        ch = interaction.guild.get_channel(g.get("clan_channel") or 0)
+        from utils.live import conf, get_ch
+        g = await conf(interaction.guild)
+        ch = get_ch(interaction.guild, g, "clan_channel")
         if isinstance(ch, discord.ForumChannel):
             await ensure_forum_example(ch)
             await interaction.followup.send(t_sync(lang, "cl_panel_bottom"), ephemeral=True)
@@ -262,7 +287,8 @@ class Clans(commands.Cog):
             return
         if not await db.is_on(message.guild.id, "clans"):
             return
-        g = await db.get_guild(message.guild.id)
+        from utils.live import conf
+        g = await conf(message.guild)
         if message.channel.id != (g.get("clan_channel") or 0):
             return
         if not isinstance(message.channel, discord.TextChannel):
@@ -283,8 +309,9 @@ class Clans(commands.Cog):
                 return
             if not await db.is_on(thread.guild.id, "clans"):
                 return
-            g = await db.get_guild(thread.guild.id)
-            if thread.parent_id != (g.get("clan_channel") or 0):
+            from utils.live import conf, is_clan_forum
+            g = await conf(thread.guild)
+            if not is_clan_forum(thread.guild, thread.parent_id, g):
                 return
             if thread.name.startswith("📌"):
                 return  # пример
@@ -345,12 +372,10 @@ class Clans(commands.Cog):
                 return
             if not await db.is_on(guild.id, "clans"):
                 return
-            g = await db.get_guild(guild.id)
-            if g.get("clan_channel") is None:
-                return
-            # реакция стоит на стартовом сообщении внутри треда: channel_id = id треда
+            from utils.live import conf, is_clan_forum
+            g = await conf(guild)
             thread = guild.get_thread(payload.channel_id)
-            if thread is None or thread.parent_id != (g.get("clan_channel") or 0):
+            if thread is None or not is_clan_forum(guild, thread.parent_id, g):
                 return
             if thread.name.startswith("📌"):
                 return  # пример не бампим

@@ -35,8 +35,9 @@ class Welcome(commands.Cog):
         try:
             if not await db.is_on(member.guild.id, "welcome"):
                 return
-            g = await db.get_guild(member.guild.id)
-            ch = member.guild.get_channel(g.get("welcome_channel") or 0)
+            from utils.live import conf, get_ch
+            g = await conf(member.guild)
+            ch = get_ch(member.guild, g, "welcome_channel")
             if not isinstance(ch, discord.TextChannel):
                 return
             from utils.i18n import get_lang as _tgl

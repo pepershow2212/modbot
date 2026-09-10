@@ -77,8 +77,9 @@ class ModActionModal(discord.ui.Modal):
 
 async def mod_log(guild: discord.Guild, text: str):
     try:
-        g = await db.get_guild(guild.id)
-        ch = guild.get_channel(g.get("mod_log_channel") or 0)
+        from utils.live import conf, get_ch
+        g = await conf(guild)
+        ch = get_ch(guild, g, "mod_log_channel")
         if isinstance(ch, discord.TextChannel):
             await ch.send(text[:1900])
     except Exception:
@@ -179,8 +180,9 @@ class Moderation(commands.Cog):
             await interaction.response.send_message(t_sync(lang, "md_only"), ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        g = await db.get_guild(interaction.guild.id)
-        dest = interaction.guild.get_channel(g.get("mod_panel_channel") or 0)
+        from utils.live import conf, get_ch
+        g = await conf(interaction.guild)
+        dest = get_ch(interaction.guild, g, "mod_panel_channel")
         if not isinstance(dest, discord.TextChannel):
             dest = interaction.channel
         await dest.send(view=build_mod_panel(user, reason, interaction.user, lang))

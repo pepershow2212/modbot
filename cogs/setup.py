@@ -31,24 +31,31 @@ async def _cooldown_ok(interaction: discord.Interaction, key: str, secs: int) ->
     return True
 
 
-async def installed_map(guild: discord.Guild) -> dict:
-    """Что реально стоит на сервере (ID из БД резолвится в канал/роль)."""
-    g = await db.get_guild(guild.id)
+def _id(v) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
 
-    def has(*cols):
-        for c in cols:
-            if guild.get_channel(g.get(c) or 0) or guild.get_role(g.get(c) or 0):
-                return True
-        return False
+
+async def installed_map(guild: discord.Guild) -> dict:
+    """Что реально стоит: сначала БД, если пусто — ищем каналы по именам на сервере."""
+    from utils.reattach import peek_modules
+    g = await db.get_guild(guild.id)
+    peeked = peek_modules(guild)
+
+    def has(col: str, key: str):
+        obj = guild.get_channel(_id(g.get(col))) or guild.get_role(_id(g.get(col)))
+        return bool(obj) or bool(peeked.get(key))
 
     return {
-        "tickets": has("ticket_panel_channel"),
-        "search": has("search_channel"),
-        "clans": has("clan_channel"),
-        "voices": has("voice_lobby"),
-        "logs": has("admin_log_channel"),
-        "moderation": has("mod_panel_channel"),
-        "welcome": has("welcome_channel"),
+        "tickets": has("ticket_panel_channel", "tickets"),
+        "search": has("search_channel", "search"),
+        "clans": has("clan_channel", "clans"),
+        "voices": has("voice_lobby", "voices"),
+        "logs": has("admin_log_channel", "logs"),
+        "moderation": has("mod_panel_channel", "moderation"),
+        "welcome": has("welcome_channel", "welcome"),
     }
 
 
@@ -58,7 +65,7 @@ async def build_setup_view(guild: discord.Guild) -> discord.ui.LayoutView:
     lang = await get_lang(guild.id)
     T = lambda k: t_sync(lang, k)
     g = await db.get_guild(guild.id)
-    states = {k: bool(g.get(col, 1)) for k, col in db.TOGGLES.items()}
+    states = {k: db.flag_on(g, k) for k in db.TOGGLES}
     installed = await installed_map(guild)
 
     view = discord.ui.LayoutView(timeout=300)
@@ -177,6 +184,11 @@ async def pick_lang_and_continue(interaction: discord.Interaction):
         await db.set_guild(interaction.guild.id, language=lang)
         from utils.i18n import set_lang_cache
         set_lang_cache(interaction.guild.id, lang)
+        try:
+            from utils.reattach import reattach_guild
+            await reattach_guild(interaction.guild, interaction.client.user, scan_messages=False, recover_children=False)
+        except Exception:
+            pass
         await interaction.response.edit_message(view=await build_setup_view(interaction.guild))
     except (discord.errors.InteractionResponded, discord.errors.HTTPException, discord.errors.NotFound):
         pass
@@ -212,6 +224,15 @@ async def install_one_and_refresh(interaction: discord.Interaction, key: str):
     except Exception:
         pass
     cog = interaction.client.get_cog("Setup")
+    try:
+        from utils.reattach import reattach_guild
+        await reattach_guild(interaction.guild, interaction.client.user, scan_messages=False, recover_children=False)
+    except Exception:
+        pass
+    installed = await installed_map(interaction.guild)
+    if installed.get(key):
+        await _refresh_or_follow(interaction, f"✅ Уже стоит на сервере — привязал, ничего не создавал.")
+        return
     fn = {"tickets": cog.install_tickets, "search": cog.install_search, "clans": cog.install_clans,
           "voices": cog.install_voices, "logs": cog.install_logs,
           "moderation": cog.install_moderation, "welcome": cog.install_welcome}[key]
@@ -246,11 +267,23 @@ async def install_all_and_refresh(interaction: discord.Interaction):
     except Exception:
         pass
     cog = interaction.client.get_cog("Setup")
+    try:
+        from utils.reattach import reattach_guild
+        await reattach_guild(interaction.guild, interaction.client.user, scan_messages=False, recover_children=False)
+    except Exception:
+        pass
+    installed = await installed_map(interaction.guild)
     out = []
-    for fn in [cog.install_tickets, cog.install_search, cog.install_clans, cog.install_voices,
-               cog.install_logs, cog.install_moderation, cog.install_welcome]:
+    for key, fn in [
+        ("tickets", cog.install_tickets), ("search", cog.install_search), ("clans", cog.install_clans),
+        ("voices", cog.install_voices), ("logs", cog.install_logs), ("moderation", cog.install_moderation),
+        ("welcome", cog.install_welcome),
+    ]:
         try:
-            out.append(await fn(interaction.guild))
+            if installed.get(key):
+                out.append(f"{key}: уже было — привязал")
+            else:
+                out.append(await fn(interaction.guild))
         except Exception as e:
             out.append(f"❌ {e}")
     await _refresh_or_follow(interaction, "✅ **Всё установлено:**\n• " + "\n• ".join(out))
@@ -491,21 +524,27 @@ class Setup(commands.Cog):
 
     async def install_voices(self, guild: discord.Guild) -> str:
         from utils.i18n import get_lang, t_sync
+        from utils.live import find_lobby, find_voice_category
         g = await db.get_guild(guild.id)
         lang = await get_lang(guild.id)
         T = lambda k: t_sync(lang, k)
-        vcat = guild.get_channel(g.get("voice_category") or 0)
+        lobby = find_lobby(guild)
+        if lobby is None:
+            try:
+                lobby = guild.get_channel(int(g.get("voice_lobby") or 0))
+            except (TypeError, ValueError):
+                lobby = None
+        vcat = find_voice_category(guild, lobby if isinstance(lobby, discord.VoiceChannel) else None)
+        if vcat is None:
+            try:
+                vcat = guild.get_channel(int(g.get("voice_category") or 0))
+            except (TypeError, ValueError):
+                vcat = None
         if not isinstance(vcat, discord.CategoryChannel):
             vcat = await guild.create_category(T("ch_voice_cat"))
-        else:
-            await self._rename(vcat, T("ch_voice_cat"))
-        # отдельных #комнат-текст больше не создаём — панель живёт в чате войса
-        lobby = guild.get_channel(g.get("voice_lobby") or 0)
         if not isinstance(lobby, discord.VoiceChannel):
             lobby = await guild.create_voice_channel(T("ch_lobby"), category=vcat, user_limit=1)
-        else:
-            await self._rename(lobby, T("ch_lobby"))
-        await db.set_guild(guild.id, voice_category=vcat.id, voice_text_category=0, voice_lobby=lobby.id)
+        await db.set_guild(guild.id, voice_category=vcat.id, voice_text_category=0, voice_lobby=lobby.id, en_voices=1)
         return f"Войсы → лобби {lobby.name} (панель в чате войса)"
 
     async def install_logs(self, guild: discord.Guild) -> str:

@@ -132,11 +132,28 @@ async def create_ticket(interaction: discord.Interaction, type_key: str, body: s
     if not await db.is_on(guild.id, "tickets"):
         await interaction.response.send_message(t_sync(lang, "tk_mod_off"), ephemeral=True)
         return
-    g = await db.get_guild(guild.id)
-    cat_id = g.get("ticket_category")
+    from utils.live import conf, get_ch
+    g = await conf(guild)
+    try:
+        cat_id = int(g.get("ticket_category") or 0)
+    except (TypeError, ValueError):
+        cat_id = 0
     category = guild.get_channel(cat_id) if cat_id else None
-    staff_id = g.get("ticket_staff_role")
+    if not isinstance(category, discord.CategoryChannel):
+        try:
+            panel = guild.get_channel(int(g.get("ticket_panel_channel") or 0))
+        except (TypeError, ValueError):
+            panel = None
+        if isinstance(panel, discord.TextChannel) and isinstance(panel.category, discord.CategoryChannel):
+            category = panel.category
+            await db.set_guild(guild.id, ticket_category=category.id)
+    try:
+        staff_id = int(g.get("ticket_staff_role") or 0)
+    except (TypeError, ValueError):
+        staff_id = 0
     staff = guild.get_role(staff_id) if staff_id else None
+    if staff is None:
+        staff = discord.utils.get(guild.roles, name="Support")
 
     num = await db.next_ticket_num(guild.id)
     meta = ticket_meta(type_key, lang)

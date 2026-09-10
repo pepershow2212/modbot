@@ -37,7 +37,10 @@ class Channels(commands.Cog):
         g = await db.get_guild(interaction.guild.id)
         lines = []
         for key, (col, _l, _t) in MODULES.items():
-            cid = g.get(col) or 0
+            try:
+                cid = int(g.get(col) or 0)
+            except (TypeError, ValueError):
+                cid = 0
             ch = interaction.guild.get_channel(cid) if cid else None
             lines.append(f"{_label(lang, key)}: {ch.mention if ch else '`' + t_sync(lang, 'ch_unset') + '`'} (`{cid or '-'}`)")
         v = discord.ui.LayoutView(timeout=60)
@@ -85,7 +88,13 @@ class Channels(commands.Cog):
             await interaction.response.send_message(t_sync(lang, "ch_badtype").format(label=label), ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await db.set_guild(interaction.guild.id, **{col: channel.id})
+        extra_cols = {col: channel.id}
+        if module == "voice_lobby" and isinstance(channel, discord.VoiceChannel) and channel.category:
+            extra_cols["voice_category"] = channel.category.id
+            extra_cols["en_voices"] = 1
+        elif module == "voice_category":
+            extra_cols["en_voices"] = 1
+        await db.set_guild(interaction.guild.id, **extra_cols)
         extra = ""
         try:
             if module == "tickets" and isinstance(channel, discord.TextChannel):

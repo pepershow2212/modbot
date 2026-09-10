@@ -91,6 +91,8 @@ CREATE TABLE IF NOT EXISTS temp_voices (
     server_id TEXT DEFAULT '—',
     gamemode TEXT DEFAULT '—',
     faction TEXT DEFAULT '—',
+    age_filter TEXT DEFAULT '—',
+    hours_filter TEXT DEFAULT '—',
     PRIMARY KEY (guild_id, voice_id)
 );
 CREATE TABLE IF NOT EXISTS clan_threads (
@@ -156,6 +158,8 @@ async def init_db():
             ("senior_role", "ALTER TABLE guilds ADD COLUMN ticket_senior_role INTEGER DEFAULT 0"),
             ("welcome_ch", "ALTER TABLE guilds ADD COLUMN welcome_channel INTEGER DEFAULT 0"),
             ("banner_url", "ALTER TABLE guilds ADD COLUMN banner_url TEXT DEFAULT ''"),
+            ("tv_age", "ALTER TABLE temp_voices ADD COLUMN age_filter TEXT DEFAULT '—'"),
+            ("tv_hours", "ALTER TABLE temp_voices ADD COLUMN hours_filter TEXT DEFAULT '—'"),
         ]:
             try:
                 await db.execute(ddl)
@@ -170,11 +174,11 @@ async def get_guild(guild_id: int) -> dict:
             row = await cur.fetchone()
             if row:
                 return dict(row)
-    # создать пустую запись
-    async with conn() as db:
         await db.execute("INSERT OR IGNORE INTO guilds(guild_id) VALUES(?)", (guild_id,))
         await db.commit()
-    return {"guild_id": guild_id}
+        async with db.execute("SELECT * FROM guilds WHERE guild_id=?", (guild_id,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else {"guild_id": guild_id}
 
 async def set_guild(guild_id: int, **kwargs):
     await get_guild(guild_id)
@@ -211,17 +215,34 @@ TOGGLE_LABELS = {
 }
 
 
+def flag_on(g: dict, module: str) -> bool:
+    """None / нет колонки = включено. Только явный 0 выключает."""
+    val = g.get(TOGGLES[module], 1)
+    if val is None:
+        return True
+    try:
+        return int(val) != 0
+    except (TypeError, ValueError):
+        return True
+
+
 async def is_on(guild_id: int, module: str) -> bool:
     try:
-        g = await get_guild(guild_id)
-        return bool(g.get(TOGGLES[module], 1))
+        return flag_on(await get_guild(guild_id), module)
     except Exception:
         return True
 
 
 async def toggle_module(guild_id: int, module: str) -> bool:
     g = await get_guild(guild_id)
-    new = 0 if g.get(TOGGLES[module], 1) else 1
+    cur = g.get(TOGGLES[module], 1)
+    if cur is None:
+        cur = 1
+    try:
+        cur = int(cur)
+    except (TypeError, ValueError):
+        cur = 1
+    new = 0 if cur else 1
     await set_guild(guild_id, **{TOGGLES[module]: new})
     return bool(new)
 
